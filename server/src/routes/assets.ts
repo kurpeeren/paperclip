@@ -335,7 +335,8 @@ export function assetRoutes(db: Db, storage: StorageService) {
       && isInlineAttachmentContentType(mediaType);
     res.setHeader("Content-Type", responseContentType);
     res.setHeader("Content-Length", String(asset.byteSize || object.contentLength || 0));
-    res.setHeader("Cache-Control", "private, max-age=60");
+    // Asset ids are immutable, so images (avatars, logos) can be cached for a long time by the viewer's browser.
+    res.setHeader("Cache-Control", responseContentType.startsWith("image/") ? "private, max-age=31536000, immutable" : "private, max-age=60");
     res.setHeader("X-Content-Type-Options", "nosniff");
     if (!inlineSafe) {
       res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
