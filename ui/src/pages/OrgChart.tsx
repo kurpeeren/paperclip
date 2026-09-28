@@ -636,8 +636,8 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                 <div className="flex items-center px-4 py-3 gap-3">
                   {/* Agent icon + status dot */}
                   <div className="relative shrink-0">
-                    <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
-                      <AgentAvatar agent={agent} size={16} className="h-4.5 w-4.5 text-foreground/70"/>
+                    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center overflow-hidden">
+                      <AgentAvatar agent={agent} size={48} className="size-12 text-foreground/70"/>
                     </div>
                     <span
                       className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card"
