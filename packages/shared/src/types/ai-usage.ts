@@ -19,6 +19,10 @@ export type AiSubscriptionUsage =
       windows: AiSubscriptionUsageWindow[];
       /** iso timestamp of the upstream fetch (cached responses keep the original) */
       fetchedAt: string;
+      /** true when the upstream refresh failed and these windows are the last successful fetch */
+      stale?: boolean;
+      /** why the last refresh failed (only set when stale); never contains credential material */
+      staleReason?: string;
     }
   | {
       available: false;

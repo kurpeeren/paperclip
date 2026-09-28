@@ -144,10 +144,17 @@ function SubscriptionSection({
     );
   }
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {data.windows.map((window) => (
-        <UsageGauge key={window.key} window={window} />
-      ))}
+    <div className="space-y-2">
+      <div className="grid gap-4 sm:grid-cols-2">
+        {data.windows.map((window) => (
+          <UsageGauge key={window.key} window={window} />
+        ))}
+      </div>
+      {data.stale ? (
+        <p className="text-xs text-muted-foreground" data-testid="usage-subscription-stale">
+          Last successful reading {new Date(data.fetchedAt).toLocaleTimeString()}. {data.staleReason}
+        </p>
+      ) : null}
     </div>
   );
 }

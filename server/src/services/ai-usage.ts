@@ -55,13 +55,34 @@ interface CacheEntry {
   value: Extract<AiSubscriptionUsage, { available: true }>;
 }
 
+/** After an upstream failure, wait this long before asking Anthropic again (longer on 429). */
+export const AI_USAGE_ERROR_BACKOFF_MS = 60 * 1000;
+export const AI_USAGE_RATE_LIMIT_BACKOFF_MS = 10 * 60 * 1000;
+
+interface BackoffEntry {
+  until: number;
+  reason: string;
+}
+
 // Keyed by company + grant so two users with different personal subscriptions
 // in the same company never see each other's quota, while one shared company
 // grant is fetched at most once per TTL for everyone.
 const subscriptionCache = new Map<string, CacheEntry>();
+// Last successful fetch per key, kept beyond the TTL so a failed refresh (429, timeout)
+// degrades to a stale gauge instead of an empty panel.
+const lastGoodCache = new Map<string, CacheEntry["value"]>();
+const backoffCache = new Map<string, BackoffEntry>();
 
 export function clearAiUsageCache() {
   subscriptionCache.clear();
+  lastGoodCache.clear();
+  backoffCache.clear();
+}
+
+function staleOrUnavailable(cacheKey: string, reason: string): AiSubscriptionUsage {
+  const lastGood = lastGoodCache.get(cacheKey);
+  if (lastGood) return { ...lastGood, stale: true, staleReason: reason };
+  return unavailable(reason);
 }
 
 function unavailable(reason: string): AiSubscriptionUsage {
@@ -284,6 +305,8 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
       const nowMs = now().getTime();
       const cached = subscriptionCache.get(cacheKey);
       if (cached && cached.expiresAt > nowMs) return cached.value;
+      const backoff = backoffCache.get(cacheKey);
+      if (backoff && backoff.until > nowMs) return staleOrUnavailable(cacheKey, backoff.reason);
 
       try {
         const windows = await fetchAnthropicUsage(credential.value, fetchImpl);
@@ -294,13 +317,22 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
           fetchedAt: new Date(nowMs).toISOString(),
         };
         subscriptionCache.set(cacheKey, { expiresAt: nowMs + cacheTtlMs, value });
+        lastGoodCache.set(cacheKey, value);
+        backoffCache.delete(cacheKey);
         return value;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const rateLimited = /429/.test(message);
         const reason = /abort/i.test(message)
           ? "The Anthropic usage API did not respond in time."
-          : `Could not load Claude subscription usage (${message}).`;
-        return unavailable(reason);
+          : rateLimited
+            ? "Anthropic usage API rate-limited this refresh (429); showing the last successful reading."
+            : `Could not load Claude subscription usage (${message}).`;
+        backoffCache.set(cacheKey, {
+          until: nowMs + (rateLimited ? AI_USAGE_RATE_LIMIT_BACKOFF_MS : AI_USAGE_ERROR_BACKOFF_MS),
+          reason,
+        });
+        return staleOrUnavailable(cacheKey, reason);
       }
     },
 
