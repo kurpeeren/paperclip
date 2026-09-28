@@ -22,6 +22,7 @@ When a heartbeat fires, Paperclip:
 | [Codex](/adapters/codex-local) | `codex_local` | Runs OpenAI Codex CLI locally, with a native ACP engine when available |
 | [Gemini CLI](/adapters/gemini-local) | `gemini_local` | Runs Gemini CLI locally (experimental — adapter package exists, not yet in stable type enum) |
 | [Kimi Code CLI](/adapters/kimi-local) | `kimi_local` | Runs Kimi Code CLI locally through ACP, with explicitly selectable headless `-p` mode |
+| [Antigravity](/adapters/antigravity-local) | `antigravity_local` | Runs Google's Antigravity CLI (`agy`) locally in headless `-p` mode against the user's Antigravity subscription (Gemini models) |
 | OpenCode | `opencode_local` | Runs OpenCode CLI locally (multi-provider `provider/model`) |
 | Cursor | `cursor` | Runs Cursor in background mode |
 | Pi | `pi_local` | Runs an embedded Pi agent locally |

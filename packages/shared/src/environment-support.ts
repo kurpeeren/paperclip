@@ -65,6 +65,7 @@ export interface EnvironmentCapabilities {
 }
 
 const REMOTE_MANAGED_ADAPTERS = new Set<AgentAdapterType>([
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "paperclip_runner",

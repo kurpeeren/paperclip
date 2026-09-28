@@ -38,6 +38,8 @@ export function setupEfforts(adapter: string, model = ""): string[] {
       return ["off", "minimal", "low", "medium", "high", "xhigh"];
     case "grok_local":
       return [...grokLocalReasoningEffortsForModel(model)];
+    case "antigravity_local":
+      return ["low", "medium", "high", "max"];
     default:
       return [];
   }
@@ -50,6 +52,8 @@ export const SETUP_LOGIN_HINTS: Record<string, string> = {
     "Use a Gemini API key, or an existing supported Gemini CLI login on the selected environment's host.",
   kimi_local:
     "Use a Kimi API key and model settings below, or run kimi login on the selected environment's host.",
+  antigravity_local:
+    "Antigravity uses its own Google sign-in. Run agy interactively once on the selected environment's host, then test the connection here.",
   grok_local:
     "Grok Build uses its CLI sign-in. Run grok login on the selected environment's host, then test the connection here.",
   hermes_local:

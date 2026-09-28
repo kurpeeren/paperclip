@@ -4,6 +4,7 @@ import type { RunProcessController } from "../application/ports.js";
 import type { RunProcessCleanupOutcome, RunProcessMetadata } from "../application/types.js";
 
 const SESSIONED_LOCAL_ADAPTERS = new Set([
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "cursor",
