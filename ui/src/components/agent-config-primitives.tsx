@@ -22,6 +22,7 @@ import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 export const help: Record<string, string> = {
   name: "Display name for this agent.",
   title: "Job title shown in the org chart.",
+  avatar: "Optional image shown instead of the generated character. PNG, JPEG, WEBP, or GIF.",
   role: "Organizational role. Determines position and capabilities.",
   reportsTo: "The agent this one reports to in the org hierarchy.",
   capabilities: "Describes what this agent can do. Shown in the org chart and used for task routing.",

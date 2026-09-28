@@ -83,6 +83,9 @@ export interface Agent {
   title: string | null;
   icon: string | null;
   appearance?: AgentAppearance | null;
+  /** Uploaded avatar image asset. It belongs to the same company as the agent. */
+  avatarAssetId?: string | null;
+  /** The uploaded avatar content path when set, otherwise the generated character image. */
   avatarUrl?: string;
   status: AgentStatus;
   reportsTo: string | null;

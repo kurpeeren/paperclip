@@ -82,6 +82,7 @@ export const createAgentSchema = z.object({
   title: z.string().optional().nullable(),
   icon: z.enum(AGENT_ICON_NAMES).optional().nullable(),
   appearance: agentAppearanceSchema.optional(),
+  avatarAssetId: z.string().guid().optional().nullable(),
   reportsTo: z.string().guid().optional().nullable(),
   capabilities: z.string().optional().nullable(),
   desiredSkills: z.array(agentDesiredSkillSelectionSchema).optional(),

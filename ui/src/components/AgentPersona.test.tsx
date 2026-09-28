@@ -45,6 +45,24 @@ describe("agent persona presentation", () => {
     expect(host.textContent).toBe("CS");
     expect(host.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Chief of Staff");
   });
+  it("renders an uploaded avatar image and falls back to the generated character after an image error", async () => {
+    const agent = { id: "agent-1", name: "Portrait", appearance, avatarAssetId: "11111111-1111-4111-8111-111111111111" };
+    await act(async () => root.render(<AgentAvatar agent={agent} size={32} />));
+    const uploaded = host.querySelector("img")!;
+    expect(uploaded.getAttribute("src")).toBe("/api/assets/11111111-1111-4111-8111-111111111111/content");
+    expect(uploaded.className).toContain("rounded-full");
+    expect(uploaded.className).toContain("object-cover");
+    expect(uploaded.getAttribute("width")).toBe("32");
+    await act(async () => { uploaded.dispatchEvent(new Event("error")); });
+    expect(host.querySelector("img")?.getAttribute("src")).toContain("/api/agent-avatars/cap-v1/bubblegum-sky/rest.png?size=32");
+  });
+  it("shows an uploaded avatar instead of starting the live character", async () => {
+    const agent = { id: "agent-1", name: "Portrait", appearance, avatarAssetId: "11111111-1111-4111-8111-111111111111" };
+    await act(async () => root.render(<AgentCharacter agent={agent} state="working" />));
+    await show();
+    expect(createCharacter).not.toHaveBeenCalled();
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/assets/11111111-1111-4111-8111-111111111111/content");
+  });
   it("allows only one live character, releases it offscreen and disposes on unmount", async () => {
     await act(async () => root.render(<><AgentCharacter appearance={appearance} /><AgentCharacter appearance={appearance} /></>));
     expect(createCharacter).not.toHaveBeenCalled();

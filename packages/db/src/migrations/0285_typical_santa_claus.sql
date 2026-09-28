@@ -1,0 +1,2 @@
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "avatar_asset_id" uuid;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "agents" ADD CONSTRAINT "agents_avatar_asset_id_assets_id_fk" FOREIGN KEY ("avatar_asset_id") REFERENCES "public"."assets"("id") ON DELETE set null ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;

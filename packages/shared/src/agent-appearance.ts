@@ -38,6 +38,10 @@ export function resolveAgentAppearance(appearance: unknown, id = "agent"): Agent
 export function agentAvatarUrl(appearance: AgentAppearance, size: AgentAvatarSize = 512, scale: 1 | 2 = 1, pose: CharacterState = "rest", muted = false): string {
   return `/api/agent-avatars/${appearance.characterVersion}/${muted ? "muted-dream" : appearance.paletteId}/${pose}.png?size=${size}&scale=${scale}`;
 }
+/** Content path for an uploaded agent avatar image asset. */
+export function agentAvatarAssetUrl(assetId: string): string {
+  return `/api/assets/${assetId}/content`;
+}
 export function characterStateForAgent(status: string): CharacterState {
   if (status === "running") return "working";
   if (status === "error") return "confused";
@@ -45,8 +49,12 @@ export function characterStateForAgent(status: string): CharacterState {
   return "idle";
 }
 
-/** Hydrate compact agent projections without an additional per-agent request. */
-export function withAgentAppearance<T extends { id: string; appearance?: AgentAppearance | null }>(agent: T) {
+/**
+ * Hydrate compact agent projections without an additional per-agent request.
+ * An uploaded avatar image wins over the generated character.
+ */
+export function withAgentAppearance<T extends { id: string; appearance?: AgentAppearance | null; avatarAssetId?: string | null }>(agent: T) {
   const appearance = resolveAgentAppearance(agent.appearance, agent.id);
-  return { ...agent, appearance, avatarUrl: agentAvatarUrl(appearance) };
+  const avatarUrl = agent.avatarAssetId ? agentAvatarAssetUrl(agent.avatarAssetId) : agentAvatarUrl(appearance);
+  return { ...agent, appearance, avatarUrl };
 }

@@ -78,6 +78,7 @@ import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { ReportsToPicker } from "./ReportsToPicker";
+import { AgentAvatarField } from "./AgentAvatarField";
 import {
   EnvironmentVariablesEditor,
   type EnvironmentVariablesEditorHandle,
@@ -1468,6 +1469,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 immediate
                 className={inputClass}
                 placeholder="e.g. VP of Engineering"
+              />
+            </Field>
+            <Field label="Avatar" hint={help.avatar}>
+              <AgentAvatarField
+                agent={props.agent}
+                value={eff("identity", "avatarAssetId", props.agent.avatarAssetId ?? null)}
+                onChange={(assetId) => mark("identity", "avatarAssetId", assetId)}
+                disabled={props.isSaving}
               />
             </Field>
             <Field label="Reports to" hint={help.reportsTo}>

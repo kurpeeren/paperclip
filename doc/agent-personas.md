@@ -56,6 +56,9 @@ front-facing identity portraits minimize the difference from WebGL.
 
 - `AgentAvatar`: image only; pass the agent record or appearance and a semantic
   size. No per-agent queries, live-renderer imports, or circle cropping.
+  When the agent record has an uploaded `avatarAssetId`, the component shows
+  that image instead, as a round `object-cover` crop in the same slot. If the
+  uploaded image fails to load, it falls back to the generated character.
 - `AgentIdentity`: agent avatar and name. Human identities keep `Identity`.
 - `AgentCharacter`: lazy live hero with state and optional tracking-region
   props, plus an explicit `trackingScope="page"` for onboarding and agent headers. One live renderer per view; other instances keep their still image.
@@ -65,6 +68,20 @@ front-facing identity portraits minimize the difference from WebGL.
 Onboarding stores the eventual palette in its existing draft and presents gray
 until verified connection/hiring succeeds. Reconnect never randomizes identity.
 Names, explicit status badges, and status text remain authoritative.
+
+## Uploaded avatar images
+
+An operator can replace the generated character with an uploaded image in the
+agent configuration Identity section (PNG, JPEG, WEBP, or GIF). The upload uses
+the ordinary company image asset flow, and the agent stores the asset in
+`agents.avatar_asset_id`. The server accepts only an image asset from the
+agent's own company; `null` clears it. Agent responses then return
+`avatarAssetId` and set `avatarUrl` to `/api/assets/<id>/content`. The persisted
+appearance does not change, so removing the image restores the same character.
+`AgentCharacter` shows the uploaded image and does not start the live
+renderer. Compact run projections that carry only an appearance, the
+server-rendered org chart export, and company export/import still use the
+generated character.
 
 ## Development and verification
 

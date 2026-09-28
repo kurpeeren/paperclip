@@ -1,9 +1,10 @@
-import { agentAppearanceSchema, randomAgentAppearance, resolveAgentAppearance, agentAvatarUrl } from "@paperclipai/shared";
+import { agentAppearanceSchema, randomAgentAppearance, resolveAgentAppearance, agentAvatarAssetUrl, agentAvatarUrl } from "@paperclipai/shared";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  assets,
   toolConnectionInstalls,
   agentConfigRevisions,
   agentApiKeys,
@@ -382,7 +383,7 @@ export function agentService(db: Db) {
       return {
         ...base,
         appearance,
-        avatarUrl: agentAvatarUrl(appearance),
+        avatarUrl: row.avatarAssetId ? agentAvatarAssetUrl(row.avatarAssetId) : agentAvatarUrl(appearance),
         orgChainHealth: getAgentWorkEligibility({
           agent: toEligibilityAgent(row),
           agents: eligibilityAgents,
@@ -458,6 +459,21 @@ export function agentService(db: Db) {
       throw unprocessable("Manager must belong to same company");
     }
     return manager;
+  }
+
+  async function assertAvatarAssetForCompany(companyId: string, assetId: string) {
+    const asset = await db
+      .select({ id: assets.id, companyId: assets.companyId, contentType: assets.contentType })
+      .from(assets)
+      .where(eq(assets.id, assetId))
+      .then((rows) => rows[0] ?? null);
+    if (!asset) throw notFound("Avatar asset not found");
+    if (asset.companyId !== companyId) {
+      throw unprocessable("Avatar asset must belong to the same company");
+    }
+    if (!asset.contentType.toLowerCase().startsWith("image/")) {
+      throw unprocessable("Avatar asset must be an image");
+    }
   }
 
   async function assertNoCycle(agentId: string, reportsTo: string | null | undefined) {
@@ -733,6 +749,10 @@ export function agentService(db: Db) {
       await assertNoCycle(id, data.reportsTo);
     }
 
+    if (data.avatarAssetId) {
+      await assertAvatarAssetForCompany(existing.companyId, data.avatarAssetId);
+    }
+
     if (data.name !== undefined) {
       const previousShortname = normalizeAgentUrlKey(existing.name);
       const nextShortname = normalizeAgentUrlKey(data.name);
@@ -879,6 +899,9 @@ export function agentService(db: Db) {
       assertBuiltInAgentMetadataMutationAllowed(null, data.metadata, options);
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
+      }
+      if (data.avatarAssetId) {
+        await assertAvatarAssetForCompany(companyId, data.avatarAssetId);
       }
 
       const existingAgents = await db

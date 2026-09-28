@@ -331,6 +331,17 @@ chat handoff. An agent's external file selection must match the attachment's
 company, task, agent, and originating run. Editing or recreating a work-product
 record cannot reassign that authority to a later run.
 
+## Agent avatar images
+
+`agents.avatar_asset_id` optionally points at an uploaded image in `assets`.
+The agent service accepts only an image asset from the agent's own company, on
+create and on update. `null` clears the avatar. The foreign key uses
+`ON DELETE SET NULL`, so a deleted asset returns the agent to its generated
+character. Replacing or clearing an avatar does not delete the earlier asset
+row, because other records such as issue attachments can reference the same
+asset. The avatar is not part of agent configuration revisions, so a rollback
+does not restore an older avatar.
+
 ## Question-response delivery receipts
 
 `issue_question_response_deliveries` is the retry-safe, content-free outbox for

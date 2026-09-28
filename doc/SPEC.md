@@ -557,8 +557,10 @@ Things Paperclip explicitly does **not** do:
 
 Agent appearances are stable, versioned ClipLab end-cap personas, separate from
 behavioral instructions. Compact surfaces use on-demand cached PNG URLs; larger
-placements may use a lazy live character. See [agent-personas.md](agent-personas.md)
-for persistence, migration, rendering, and integration contracts.
+placements may use a lazy live character. An operator may replace the
+character with an uploaded image from the same company's assets. See
+[agent-personas.md](agent-personas.md) for persistence, migration, rendering,
+and integration contracts.
 ### Agent chat project handoff (2026-09-11)
 
 Chat supports research and full plan drafting/revision in its existing plan document. On handoff, each ordinary assigned task receives the relevant plan in its own `plan` document, committed with task creation before execution is scheduled. The source plan remains in the conversation. Plan acceptance hands off execution; it never switches the conversation into implementation.
