@@ -28,6 +28,11 @@ export function materializePublishManifest(pkg) {
   }
 
   delete publishManifest.publishConfig;
+  // The bundle is already built; npm pack must not re-run workspace-only lifecycle scripts.
+  if (publishManifest.scripts) {
+    for (const hook of ["prepack", "postpack", "prepare", "prepublishOnly"]) delete publishManifest.scripts[hook];
+    if (Object.keys(publishManifest.scripts).length === 0) delete publishManifest.scripts;
+  }
   return publishManifest;
 }
 
