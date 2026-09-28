@@ -1,5 +1,5 @@
 import { AgentAvatar } from "@/components/AgentAvatar";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
@@ -282,6 +282,24 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
   const suppressNextCardClick = useRef(false);
   const suppressClickTimerRef = useRef<number | null>(null);
 
+  // Coalesce pan updates to one React commit per animation frame. Without this every
+  // mousemove/touchmove re-rendered the whole chart, which made dragging stutter.
+  const panFrameRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<Point | null>(null);
+  const schedulePan = useCallback((next: Point) => {
+    pendingPanRef.current = next;
+    if (panFrameRef.current !== null) return;
+    panFrameRef.current = window.requestAnimationFrame(() => {
+      panFrameRef.current = null;
+      if (pendingPanRef.current) setPan(pendingPanRef.current);
+    });
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       if (suppressClickTimerRef.current !== null) {
@@ -320,8 +338,8 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
     if (!dragging) return;
     const dx = e.clientX - dragStart.current.x;
     const dy = e.clientY - dragStart.current.y;
-    setPan({ x: dragStart.current.panX + dx, y: dragStart.current.panY + dy });
-  }, [dragging]);
+    schedulePan({ x: dragStart.current.panX + dx, y: dragStart.current.panY + dy });
+  }, [dragging, schedulePan]);
 
   const handleMouseUp = useCallback(() => {
     setDragging(false);
@@ -581,7 +599,31 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
           }}
         >
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-            {edges.map(({ parent, child }) => {
+            <OrgEdgeLayer edges={edges} />
+          </g>
+        </svg>
+
+        {/* Card layer */}
+        <div
+          data-testid="org-chart-card-layer"
+          className="absolute inset-0"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: "0 0",
+            willChange: "transform",
+          }}
+        >
+          <OrgCardLayer nodes={allNodes} agentMap={agentMap} navigate={navigate} suppressNextCardClick={suppressNextCardClick} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const OrgEdgeLayer = memo(function OrgEdgeLayer({ edges }: { edges: Array<{ parent: LayoutNode; child: LayoutNode }> }) {
+  return (
+    <>
+      {edges.map(({ parent, child }) => {
               const x1 = parent.x + CARD_W / 2;
               const y1 = parent.y + CARD_H;
               const x2 = child.x + CARD_W / 2;
@@ -598,19 +640,24 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                 />
               );
             })}
-          </g>
-        </svg>
+    </>
+  );
+});
 
-        {/* Card layer */}
-        <div
-          data-testid="org-chart-card-layer"
-          className="absolute inset-0"
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "0 0",
-          }}
-        >
-          {allNodes.map((node) => {
+const OrgCardLayer = memo(function OrgCardLayer({
+  nodes,
+  agentMap,
+  navigate,
+  suppressNextCardClick,
+}: {
+  nodes: LayoutNode[];
+  agentMap: Map<string, Agent>;
+  navigate: ReturnType<typeof useNavigate>;
+  suppressNextCardClick: React.MutableRefObject<boolean>;
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
             const agent = agentMap.get(node.id);
             const dotColor = statusDotColor[node.status] ?? defaultDotColor;
 
@@ -667,11 +714,9 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
               </Card>
             );
           })}
-        </div>
-      </div>
-    </div>
+    </>
   );
-}
+});
 
 const roleLabels: Record<string, string> = AGENT_ROLE_LABELS;
 
