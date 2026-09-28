@@ -25,6 +25,7 @@ const joinAdapterOptions: AgentAdapterType[] = AGENT_ADAPTER_TYPES.filter(
   (type) => type !== "paperclip_runner",
 );
 const ENABLED_INVITE_ADAPTERS = new Set([
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "gemini_local",
