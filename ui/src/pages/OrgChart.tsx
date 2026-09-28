@@ -184,6 +184,13 @@ function touchCenter(a: React.Touch, b: React.Touch, container: HTMLDivElement):
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 
+/** "Claude Code · claude-sonnet-5": adapter label plus the configured model, when one is set. */
+function agentRuntimeLabel(agent: { adapterType: string; adapterConfig?: Record<string, unknown> | null }): string {
+  const label = getAdapterLabel(agent.adapterType);
+  const model = agent.adapterConfig?.model;
+  return typeof model === "string" && model.trim() ? `${label} · ${model.trim()}` : label;
+}
+
 const statusDotColor: Record<string, string> = {
   running: "var(--hex-22d3ee)",
   active: "var(--hex-4ade80)",
@@ -647,7 +654,7 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                     </span>
                     {agent && (
                       <span className="text-(length:--text-nano) text-muted-foreground/60 font-mono leading-tight mt-1">
-                        {getAdapterLabel(agent.adapterType)}
+                        {agentRuntimeLabel(agent)}
                       </span>
                     )}
                     {agent && agent.capabilities && (
