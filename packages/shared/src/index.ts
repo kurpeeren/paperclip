@@ -1618,6 +1618,11 @@ export type {
   OAuthRedirectConstraints,
   QuotaWindow,
   ProviderQuotaResult,
+  AiSubscriptionUsage,
+  AiSubscriptionUsageWindow,
+  AiUsageFamilyTotals,
+  AiUsagePeriodSummary,
+  AiUsageSummary,
 } from "./types/index.js";
 export { WORKSPACE_READINESS_STATES } from "./types/index.js";
 export {
@@ -2773,6 +2778,7 @@ export { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from
 
 export * from "./agent-appearance.js";
 export * from "./ai-connections.js";
+export * from "./ai-usage.js";
 export * from "./types/email.js";
 export * from "./validators/email.js";
 export { configureRailwaySshSchema, type ConfigureRailwaySsh, type RailwaySshSetup } from "./railway-connection.js";

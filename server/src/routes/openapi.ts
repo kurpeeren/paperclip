@@ -5165,6 +5165,20 @@ for (const segment of costSummaryPaths) {
   });
 }
 
+for (const segment of ["subscription", "summary"] as const) {
+  registry.registerPath({
+    method: "get",
+    path: `/api/companies/{companyId}/ai-usage/${segment}`,
+    tags: ["costs"],
+    summary:
+      segment === "subscription"
+        ? "Model usage: live Claude subscription quota windows (board only)"
+        : "Model usage: token and cost totals per model family (board only)",
+    request: { params: z.object({ companyId: z.string() }) },
+    responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+  });
+}
+
 registry.registerPath({
   method: "post",
   path: "/api/companies/{companyId}/cost-events",

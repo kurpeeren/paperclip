@@ -83,6 +83,30 @@ describe("managed AI connections", () => {
     } finally { await Promise.all([subRun.cleanup(), apiRun.cleanup()]); }
   });
 
+  it("resolves a board user's subscription credential for dashboard usage without an agent context", async () => {
+    const owner = "usage-subscription-owner";
+    const member = "usage-subscription-member";
+    await db.insert(companyMemberships).values([owner, member].map(principalId => ({ companyId, principalId, principalType: "user", status: "active", membershipRole: "member" })));
+    // Nothing connected, then an API key only: neither is a subscription.
+    expect(await service.resolveSubscriptionCredential(companyId, owner, "anthropic")).toBeNull();
+    await create(owner, "Usage API");
+    expect(await service.resolveSubscriptionCredential(companyId, owner, "anthropic")).toBeNull();
+    const personal = await service.save(companyId, owner, { provider: "anthropic", method: "subscription", ownership: "personal", name: "Usage subscription", loginSessionId: "fixture", allAgents: true, agentIds: [] }, "fixture-usage-oauth");
+    expect(await service.resolveSubscriptionCredential(companyId, owner, "anthropic")).toEqual({ connectionId: personal.connectionId, grantId: personal.grantId, value: "fixture-usage-oauth" });
+    // A personal credential is invisible to other members, other companies and non-members.
+    expect(await service.resolveSubscriptionCredential(companyId, member, "anthropic")).toBeNull();
+    expect(await service.resolveSubscriptionCredential(otherCompanyId, owner, "anthropic")).toBeNull();
+    expect(await service.resolveSubscriptionCredential(companyId, "usage-outsider", "anthropic")).toBeNull();
+    // A shared company subscription serves every active member; the owner's personal one still wins for them.
+    const shared = await service.save(companyId, owner, { provider: "anthropic", method: "subscription", ownership: "shared", name: "Usage shared subscription", loginSessionId: "fixture", allAgents: true, agentIds: [] }, "fixture-usage-shared");
+    expect(await service.resolveSubscriptionCredential(companyId, member, "anthropic")).toEqual({ connectionId: shared.connectionId, grantId: shared.grantId, value: "fixture-usage-shared" });
+    expect((await service.resolveSubscriptionCredential(companyId, owner, "anthropic"))?.grantId).toBe(personal.grantId);
+    // Provider scoping and revocation are honored.
+    expect(await service.resolveSubscriptionCredential(companyId, member, "openai")).toBeNull();
+    await db.update(connectionGrants).set({ status: "revoked" }).where(eq(connectionGrants.id, shared.grantId));
+    expect(await service.resolveSubscriptionCredential(companyId, member, "anthropic")).toBeNull();
+  });
+
   it("has one provider default across methods, retains unavailable defaults and honors explicit account methods", async () => {
     const userId = "provider-default-user";
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
