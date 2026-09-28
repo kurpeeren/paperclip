@@ -1,15 +1,44 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-export function materializePublishManifest(pkg) {
+const workspaceVersionCache = new Map();
+
+/** name -> version for every workspace package, so workspace: specifiers resolve to the dependency's own version. */
+function workspacePackageVersions(root = repoRoot) {
+  if (workspaceVersionCache.has(root)) return workspaceVersionCache.get(root);
+  const versions = new Map();
+  const walk = (dir, depth) => {
+    if (depth > 4 || !existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const child = resolve(dir, entry.name);
+      const manifest = resolve(child, "package.json");
+      if (existsSync(manifest)) {
+        try {
+          const parsed = JSON.parse(readFileSync(manifest, "utf8"));
+          if (parsed.name && parsed.version) versions.set(parsed.name, parsed.version);
+        } catch {
+          // ignore unreadable manifests
+        }
+      }
+      walk(child, depth + 1);
+    }
+  };
+  walk(root, 0);
+  workspaceVersionCache.set(root, versions);
+  return versions;
+}
+
+export function materializePublishManifest(pkg, { sourceRoot = repoRoot } = {}) {
   const publishConfig = pkg.publishConfig ?? {};
   const publishManifest = { ...pkg };
+  const workspaceVersions = workspacePackageVersions(sourceRoot);
 
   for (const key of ["main", "types", "exports", "bin"]) {
     if (publishConfig[key] !== undefined) publishManifest[key] = publishConfig[key];
@@ -22,7 +51,8 @@ export function materializePublishManifest(pkg) {
         if (typeof specifier !== "string" || !specifier.startsWith("workspace:")) return [name, specifier];
         const range = specifier.slice("workspace:".length);
         const prefix = range === "^" || range === "~" ? range : "";
-        return [name, `${prefix}${pkg.version}`];
+        const version = workspaceVersions.get(name) ?? pkg.version;
+        return [name, `${prefix}${version}`];
       }),
     );
   }
@@ -161,7 +191,7 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
   }
 
   const deployedPackagePath = resolve(destinationDir, "package.json");
-  const publishManifest = materializePublishManifest(sourcePackage);
+  const publishManifest = materializePublishManifest(sourcePackage, { sourceRoot });
   const installManifest = createBundledInstallManifest(publishManifest, bundledDependencies);
   writeFileSync(deployedPackagePath, `${JSON.stringify(installManifest, null, 2)}\n`);
 
