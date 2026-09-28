@@ -977,6 +977,13 @@ export type {
 } from "./access.js";
 export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
 export type {
+  AiSubscriptionUsage,
+  AiSubscriptionUsageWindow,
+  AiUsageFamilyTotals,
+  AiUsagePeriodSummary,
+  AiUsageSummary,
+} from "./ai-usage.js";
+export type {
   CompanyPortabilityInclude,
   CompanyPortabilityEnvInput,
   CompanyPortabilityFileEntry,

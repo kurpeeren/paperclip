@@ -373,7 +373,9 @@ export function aiConnectionService(db: Db) {
       } satisfies AiConnectionAttribution,
     };
   }
-  async function credential(row: Awaited<ReturnType<typeof select>>) {
+  async function credential(
+    row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">,
+  ) {
     const ref = row.grant.credentialSecretRefs.find(
       (r) => r.configPath === "ai.credential",
     );
@@ -775,5 +777,72 @@ export function aiConnectionService(db: Db) {
       return { connectionId: id, grantId };
     });
   }
-  return { list, select, credential, save, setDefault, membership };
+  /**
+   * Resolve a usable subscription credential for a board user without an
+   * agent-run context (e.g. the dashboard quota gauges). Applies the same
+   * health, membership and audience rules as `select`: the user's provider
+   * default wins, then their personal subscription grants, then shared
+   * company grants they are permitted to use. Returns null when nothing
+   * qualifies; the credential value is never logged by callers.
+   */
+  async function resolveSubscriptionCredential(
+    companyId: string,
+    userId: string,
+    provider: AiConnectionMetadata["provider"],
+  ): Promise<{ connectionId: string; grantId: string; value: string } | null> {
+    if (!(await membership(companyId, userId))) return null;
+    const [accounts, defaults, members] = await Promise.all([
+      rows(companyId),
+      db
+        .select()
+        .from(aiProviderDefaults)
+        .where(
+          and(
+            eq(aiProviderDefaults.companyId, companyId),
+            eq(aiProviderDefaults.userId, userId),
+            eq(aiProviderDefaults.provider, provider),
+          ),
+        )
+        .limit(1),
+      db
+        .select()
+        .from(connectionGrantMembers)
+        .where(eq(connectionGrantMembers.companyId, companyId)),
+    ]);
+    const candidates = accounts.filter(({ connection, grant }) => {
+      const metadata = aiConnectionMetadataSchema.safeParse(connection.config.ai);
+      if (!metadata.success) return false;
+      if (metadata.data.provider !== provider || metadata.data.method !== "subscription") return false;
+      if (aiSubscriptionNeedsIsolatedLogin(connection.config)) return false;
+      if (
+        grant.status !== "active" ||
+        !connection.enabled ||
+        connection.status !== "active" ||
+        connection.healthStatus !== "ok"
+      )
+        return false;
+      return canUseCredential(grant, userId, members.filter((m) => m.grantId === grant.id));
+    });
+    const defaultGrantId = defaults[0]?.grantId;
+    const ordered = [
+      ...candidates.filter((c) => c.grant.id === defaultGrantId),
+      ...candidates.filter((c) => c.grant.id !== defaultGrantId && c.grant.kind === "user"),
+      ...candidates.filter((c) => c.grant.id !== defaultGrantId && c.grant.kind !== "user"),
+    ];
+    for (const row of ordered) {
+      if (
+        row.grant.kind === "user" &&
+        !(await membership(companyId, row.grant.subjectUserId))
+      )
+        continue;
+      try {
+        const value = await credential(row);
+        return { connectionId: row.connection.id, grantId: row.grant.id, value };
+      } catch {
+        // A grant whose secret was removed is skipped; the next candidate may still work.
+      }
+    }
+    return null;
+  }
+  return { list, select, credential, save, setDefault, membership, resolveSubscriptionCredential };
 }

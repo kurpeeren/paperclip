@@ -1135,6 +1135,8 @@ Allowed states are `joined` and `left`. Endpoints require a concrete board user 
 
 - `GET /companies/:companyId/activity`
 - `GET /companies/:companyId/dashboard`
+- `GET /companies/:companyId/ai-usage/subscription` (board only; live Claude subscription quota windows via the company's stored Anthropic subscription connection, cached ~5 minutes; returns `{ available: false, reason }` instead of an error when no connection exists or the upstream call fails)
+- `GET /companies/:companyId/ai-usage/summary` (board only; token and cost totals per model family for today / 7 days / 30 days with an hourly burn rate, from `cost_events`)
 
 Dashboard payload must include:
 
