@@ -979,6 +979,8 @@ export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
 export type {
   AiSubscriptionUsage,
   AiSubscriptionUsageWindow,
+  AiUsageAgentTokenBudget,
+  AiUsageAgentTotals,
   AiUsageFamilyTotals,
   AiUsagePeriodSummary,
   AiUsageSummary,

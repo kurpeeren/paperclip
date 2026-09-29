@@ -1,21 +1,17 @@
 import { useState } from "react";
 import type { BudgetIncident } from "@paperclipai/shared";
 import { AlertOctagon, ArrowUpRight, PauseCircle } from "lucide-react";
-import { formatCents } from "../lib/utils";
+import {
+  budgetAmountInputValue,
+  budgetWindowLabel,
+  formatBudgetAmount,
+  parseBudgetAmountInput,
+  tokenAmountHint,
+} from "../lib/budget-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-
-function centsInputValue(value: number) {
-  return (value / 100).toFixed(2);
-}
-
-function parseDollarInput(value: string) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return Math.round(parsed * 100);
-}
 
 function incidentStateLabel(incident: BudgetIncident) {
   if (incident.status === "resolved") return "Resolved";
@@ -25,6 +21,14 @@ function incidentStateLabel(incident: BudgetIncident) {
   return "Open";
 }
 
+/** A sensible starting point for the raised limit: a bit above what was observed. */
+function suggestedRaise(incident: BudgetIncident) {
+  const headroom = incident.metric === "tokens"
+    ? Math.ceil(incident.amountObserved * 0.25)
+    : 1000;
+  return Math.max(incident.amountObserved + headroom, incident.amountLimit);
+}
+
 export function BudgetIncidentCard({
   incident,
   onRaiseAndResume,
@@ -32,24 +36,24 @@ export function BudgetIncidentCard({
   isMutating,
 }: {
   incident: BudgetIncident;
-  onRaiseAndResume: (amountCents: number) => void;
+  /** amount in the incident's metric unit (cents or tokens) */
+  onRaiseAndResume: (amount: number) => void;
   onKeepPaused: () => void;
   isMutating?: boolean;
 }) {
-  const [draftAmount, setDraftAmount] = useState(
-    centsInputValue(Math.max(incident.amountObserved + 1000, incident.amountLimit)),
-  );
-  const parsed = parseDollarInput(draftAmount);
+  const isTokens = incident.metric === "tokens";
+  const [draftAmount, setDraftAmount] = useState(budgetAmountInputValue(incident.metric, suggestedRaise(incident)));
+  const parsed = parseBudgetAmountInput(incident.metric, draftAmount);
   const stateLabel = incidentStateLabel(incident);
 
   return (
-    <Card className="overflow-hidden border-red-500/20 bg-(image:--gradient-extract-4)">
+    <Card className="overflow-hidden border-red-500/20 bg-(image:--gradient-extract-4)" data-testid={`budget-incident-${incident.metric}`}>
       <CardHeader className="px-5 pt-5 pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-(length:--text-micro) uppercase tracking-(--tracking-caps) text-red-700/90 dark:text-red-200/80">
-                {incident.scopeType} hard stop
+                {incident.scopeType} {incident.thresholdType === "hard" ? "hard stop" : "warning"}
               </div>
               <Badge variant={incident.status === "resolved" ? "outline" : "secondary"}>
                 {stateLabel}
@@ -57,7 +61,8 @@ export function BudgetIncidentCard({
             </div>
             <CardTitle className="mt-1 text-base text-red-950 dark:text-red-50">{incident.scopeName}</CardTitle>
             <CardDescription className="mt-1 text-red-900/75 dark:text-red-100/70">
-              Spending reached {formatCents(incident.amountObserved)} against a limit of {formatCents(incident.amountLimit)}.
+              {isTokens ? "Token usage" : "Spending"} reached {formatBudgetAmount(incident.metric, incident.amountObserved)} against a
+              {" "}{budgetWindowLabel(incident.windowKind).toLowerCase()} limit of {formatBudgetAmount(incident.metric, incident.amountLimit)}.
             </CardDescription>
           </div>
           <div className="rounded-full border border-red-400/30 bg-red-500/10 p-2 text-red-600 dark:text-red-200">
@@ -70,21 +75,21 @@ export function BudgetIncidentCard({
           <PauseCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             {incident.scopeType === "project"
-              ? "Project execution is paused. New work in this project will not start until you resolve the budget incident."
-              : "This scope is paused. New heartbeats will not start until you resolve the budget incident."}
+              ? "Project execution is paused. New work in this project will not start until you resolve the budget incident or its window rolls over."
+              : "This scope is paused. New heartbeats will not start until you resolve the budget incident or its window rolls over."}
           </div>
         </div>
 
         <div className="rounded-xl border border-border/60 bg-background/60 p-3">
           <label className="text-(length:--text-micro) uppercase tracking-(--tracking-caps) text-muted-foreground">
-            New budget (USD)
+            {isTokens ? "New token limit" : "New budget (USD)"}
           </label>
           <div className="mt-2 flex flex-col gap-3 sm:flex-row">
             <Input
               value={draftAmount}
               onChange={(event) => setDraftAmount(event.target.value)}
-              inputMode="decimal"
-              placeholder="0.00"
+              inputMode={isTokens ? "numeric" : "decimal"}
+              placeholder={isTokens ? "20000000" : "0.00"}
             />
             <Button
               className="gap-2"
@@ -94,12 +99,15 @@ export function BudgetIncidentCard({
               }}
             >
               <ArrowUpRight className="h-4 w-4" />
-              {isMutating ? "Applying..." : "Raise budget & resume"}
+              {isMutating ? "Applying..." : isTokens ? "Raise limit & resume" : "Raise budget & resume"}
             </Button>
           </div>
+          {isTokens ? (
+            <p className="mt-2 text-xs text-muted-foreground tabular-nums">{tokenAmountHint(parsed)}</p>
+          ) : null}
           {parsed !== null && parsed <= incident.amountObserved ? (
             <p className="mt-2 text-xs text-red-700 dark:text-red-200/80">
-              The new budget must exceed current observed spend.
+              The new limit must exceed current observed usage.
             </p>
           ) : null}
         </div>

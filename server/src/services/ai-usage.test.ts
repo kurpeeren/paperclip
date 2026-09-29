@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_OAUTH_USAGE_URL,
   aiUsageService,
+  buildAgentTotals,
   buildPeriodSummary,
   clearAiUsageCache,
   parseAnthropicUsagePayload,
+  type AiUsageAgentRow,
+  type AiUsageAgentTokenPolicy,
   type AiUsageCostRow,
 } from "./ai-usage.js";
 
@@ -270,6 +273,7 @@ describe("buildPeriodSummary", () => {
     const to = new Date("2026-09-28T12:00:00Z");
     const summary = buildPeriodSummary("7d", [], from, to);
     expect(summary.families).toEqual([]);
+    expect(summary.byAgent).toEqual([]);
     expect(summary.elapsedHours).toBe(168);
     expect(summary.totals).toEqual({
       inputTokens: null,
@@ -284,12 +288,93 @@ describe("buildPeriodSummary", () => {
   });
 });
 
+const agentRow = (overrides: Partial<AiUsageAgentRow>): AiUsageAgentRow => ({
+  agentId: "agent-1",
+  name: "Agent One",
+  avatarUrl: "/api/assets/asset-1/content",
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  outputTokens: 0,
+  eventCount: 1,
+  runCount: 1,
+  ...overrides,
+});
+
+describe("buildAgentTotals", () => {
+  it("sums the three token columns per agent, sorts by total and attaches the token budget", () => {
+    const policy: AiUsageAgentTokenPolicy = {
+      agentId: "agent-1",
+      policyId: "policy-1",
+      windowKind: "calendar_day_utc",
+      windowStart: new Date("2026-09-28T00:00:00Z"),
+      windowEnd: new Date("2026-09-29T00:00:00Z"),
+      amount: 20_000_000,
+      observed: 12_400_000,
+      hardStopEnabled: true,
+    };
+    const totals = buildAgentTotals(
+      [
+        agentRow({ agentId: "agent-1", inputTokens: 10_000_000, cachedInputTokens: 2_000_000, outputTokens: 400_000, runCount: 4 }),
+        agentRow({ agentId: "agent-2", name: "Agent Two", avatarUrl: null, inputTokens: 30_000_000, outputTokens: 1_000_000, runCount: 9 }),
+      ],
+      [policy],
+    );
+    expect(totals.map((t) => t.agentId)).toEqual(["agent-2", "agent-1"]);
+    expect(totals[1]).toEqual({
+      agentId: "agent-1",
+      name: "Agent One",
+      avatarUrl: "/api/assets/asset-1/content",
+      runCount: 4,
+      eventCount: 1,
+      inputTokens: 10_000_000,
+      cachedInputTokens: 2_000_000,
+      outputTokens: 400_000,
+      totalTokens: 12_400_000,
+      tokenBudget: {
+        policyId: "policy-1",
+        windowKind: "calendar_day_utc",
+        windowLabel: "Daily (UTC)",
+        windowStart: "2026-09-28T00:00:00.000Z",
+        windowEnd: "2026-09-29T00:00:00.000Z",
+        limit: 20_000_000,
+        observed: 12_400_000,
+        utilizationPercent: 62,
+        hardStopEnabled: true,
+      },
+    });
+    expect(totals[0]!.tokenBudget).toBeNull();
+    expect(totals[0]!.totalTokens).toBe(31_000_000);
+  });
+
+  it("keeps bigint-sized totals exact and reports over-limit utilization above 100", () => {
+    const totals = buildAgentTotals(
+      [agentRow({ inputTokens: 6_000_000_000, cachedInputTokens: 3_000_000_000, outputTokens: 1_000_000_000 })],
+      [{
+        agentId: "agent-1",
+        policyId: "policy-1",
+        windowKind: "calendar_month_utc",
+        windowStart: new Date("2026-09-01T00:00:00Z"),
+        windowEnd: new Date("2026-10-01T00:00:00Z"),
+        amount: 5_000_000_000,
+        observed: 10_000_000_000,
+        hardStopEnabled: false,
+      }],
+    );
+    expect(totals[0]!.totalTokens).toBe(10_000_000_000);
+    expect(totals[0]!.tokenBudget).toMatchObject({ limit: 5_000_000_000, observed: 10_000_000_000, utilizationPercent: 200 });
+  });
+});
+
 describe("aiUsageService.summary", () => {
   it("queries each period with its own window and labels them", async () => {
     const nowDate = new Date("2026-09-28T06:00:00Z");
     const loadCostRows = vi.fn(async () => []);
+    const loadAgentRows = vi.fn(async () => []);
+    const loadAgentTokenPolicies = vi.fn(async () => []);
     const service = aiUsageService({} as any, {
       loadCostRows,
+      loadAgentRows,
+      loadAgentTokenPolicies,
       now: () => nowDate,
       resolveCredential: async () => null,
     });
@@ -302,9 +387,44 @@ describe("aiUsageService.summary", () => {
       ["30d", "30 days", "2026-08-29T06:00:00.000Z"],
     ]);
     expect(loadCostRows).toHaveBeenCalledTimes(3);
+    expect(loadAgentRows).toHaveBeenCalledTimes(3);
     for (const call of loadCostRows.mock.calls as unknown as [string, Date, Date][]) {
       expect(call[0]).toBe("company-1");
       expect(call[2]).toEqual(nowDate);
     }
+    // Token policies are evaluated once against their own window, not per period.
+    expect(loadAgentTokenPolicies).toHaveBeenCalledTimes(1);
+    expect(loadAgentTokenPolicies).toHaveBeenCalledWith("company-1", nowDate);
+  });
+
+  it("includes per-agent totals with the token limit in every period", async () => {
+    const nowDate = new Date("2026-09-28T06:00:00Z");
+    const service = aiUsageService({} as any, {
+      loadCostRows: async () => [],
+      loadAgentRows: async (_companyId, from) =>
+        from.getTime() === Date.UTC(2026, 8, 28) ? [agentRow({ inputTokens: 100, outputTokens: 20, runCount: 2 })] : [],
+      loadAgentTokenPolicies: async () => [{
+        agentId: "agent-1",
+        policyId: "policy-1",
+        windowKind: "calendar_day_utc",
+        windowStart: new Date("2026-09-28T00:00:00Z"),
+        windowEnd: new Date("2026-09-29T00:00:00Z"),
+        amount: 1_000,
+        observed: 120,
+        hardStopEnabled: true,
+      }],
+      now: () => nowDate,
+      resolveCredential: async () => null,
+    });
+    const summary = await service.summary("company-1");
+    const today = summary.periods.find((p) => p.period === "today")!;
+    expect(today.byAgent).toHaveLength(1);
+    expect(today.byAgent[0]).toMatchObject({
+      agentId: "agent-1",
+      totalTokens: 120,
+      runCount: 2,
+      tokenBudget: { limit: 1_000, observed: 120, utilizationPercent: 12, windowLabel: "Daily (UTC)" },
+    });
+    expect(summary.periods.find((p) => p.period === "7d")!.byAgent).toEqual([]);
   });
 });

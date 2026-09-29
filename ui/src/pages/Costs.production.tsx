@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BudgetPolicySummary,
+  BudgetPolicyUpsertInput,
   CostByAgentModel,
   CostByBiller,
   CostByProviderModel,
@@ -11,11 +12,14 @@ import type {
   QuotaWindow,
 } from "@paperclipai/shared";
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, Coins, DollarSign, ReceiptText } from "lucide-react";
+import { agentsApi } from "../api/agents";
 import { budgetsApi } from "../api/budgets";
+import { projectsApi } from "../api/projects";
 import { costsApi } from "../api/costs";
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { BudgetPolicyForm } from "../components/BudgetPolicyForm";
 import { EmptyState } from "../components/EmptyState";
 import { FinanceBillerCard } from "../components/FinanceBillerCard";
 import { FinanceKindCard } from "../components/FinanceKindCard";
@@ -209,19 +213,20 @@ export function Costs() {
   };
 
   const policyMutation = useMutation({
-    mutationFn: (input: {
-      scopeType: BudgetPolicySummary["scopeType"];
-      scopeId: string;
-      amount: number;
-      windowKind: BudgetPolicySummary["windowKind"];
-    }) =>
-      budgetsApi.upsertPolicy(companyId, {
-        scopeType: input.scopeType,
-        scopeId: input.scopeId,
-        amount: input.amount,
-        windowKind: input.windowKind,
-      }),
+    mutationFn: (input: BudgetPolicyUpsertInput) => budgetsApi.upsertPolicy(companyId, input),
     onSuccess: invalidateBudgetViews,
+  });
+
+  const { selectedCompany: budgetCompany } = useCompany();
+  const { data: budgetScopeAgents } = useQuery({
+    queryKey: queryKeys.agents.list(companyId),
+    queryFn: () => agentsApi.list(companyId),
+    enabled: !!companyId,
+  });
+  const { data: budgetScopeProjects } = useQuery({
+    queryKey: queryKeys.projects.all(companyId),
+    queryFn: () => projectsApi.list(companyId),
+    enabled: !!companyId,
   });
 
   const incidentMutation = useMutation({
@@ -902,6 +907,19 @@ export function Costs() {
                 </div>
               ) : null}
 
+              <BudgetPolicyForm
+                scopeOptions={{
+                  company: { id: companyId, name: budgetCompany?.name ?? "Organization" },
+                  agents: (budgetScopeAgents ?? [])
+                    .filter((agent) => agent.status !== "terminated")
+                    .map((agent) => ({ id: agent.id, name: agent.name })),
+                  projects: (budgetScopeProjects ?? []).map((project) => ({ id: project.id, name: project.name })),
+                }}
+                existing={budgetPolicies}
+                onSubmit={(input) => policyMutation.mutate(input)}
+                isSaving={policyMutation.isPending}
+              />
+
               <div className="space-y-5">
                 {(["company", "agent", "project"] as const).map((scopeType) => {
                   const rows = budgetPoliciesByScope[scopeType];
@@ -912,10 +930,10 @@ export function Costs() {
                         <h2 className="text-lg font-semibold capitalize">{scopeType} budgets</h2>
                         <p className="text-sm text-muted-foreground">
                           {scopeType === "company"
-                            ? "Company-wide monthly policy."
+                            ? "Company-wide spend or token limits."
                             : scopeType === "agent"
-                              ? "Recurring monthly spend policies for individual agents."
-                              : "Lifetime spend policies for execution-bound projects."}
+                              ? "Spend or token limits per agent over a daily, monthly or lifetime window."
+                              : "Spend or token limits for execution-bound projects."}
                         </p>
                       </div>
                       <div className="grid gap-4 xl:grid-cols-2">
@@ -929,6 +947,7 @@ export function Costs() {
                                 scopeType: summary.scopeType,
                                 scopeId: summary.scopeId,
                                 amount,
+                                metric: summary.metric,
                                 windowKind: summary.windowKind,
                               })}
                           />
@@ -941,7 +960,7 @@ export function Costs() {
                 {budgetPolicies.length === 0 ? (
                   <Card>
                     <CardContent className="px-5 py-8 text-sm text-muted-foreground">
-                      No budget policies yet. Set agent and project budgets from their detail pages, or use the existing company monthly budget control.
+                      No budget policies yet. Create one above to cap billed spend or tokens per agent, project or organization.
                     </CardContent>
                   </Card>
                 ) : null}

@@ -1,4 +1,5 @@
 import type { AiUsageModelFamily, AiUsagePeriod } from "../ai-usage.js";
+import type { BudgetWindowKind } from "../constants.js";
 
 /** One rate-limit window from the provider's subscription usage API. */
 export interface AiSubscriptionUsageWindow {
@@ -44,6 +45,43 @@ export interface AiUsageFamilyTotals {
   tokensPerHour: number | null;
 }
 
+/**
+ * The active `tokens` budget policy of an agent, evaluated over the policy's
+ * own current window (not the dashboard period), so the panel can show
+ * "used / daily limit" next to the period totals.
+ */
+export interface AiUsageAgentTokenBudget {
+  policyId: string;
+  windowKind: BudgetWindowKind;
+  /** human label of the window, e.g. "Daily (UTC)" */
+  windowLabel: string;
+  windowStart: string;
+  windowEnd: string;
+  /** token limit of the policy */
+  limit: number;
+  /** tokens observed inside the policy window */
+  observed: number;
+  /** observed / limit, in percent, not clamped (>100 when over) */
+  utilizationPercent: number;
+  hardStopEnabled: boolean;
+}
+
+/** Token totals for one agent inside one period. */
+export interface AiUsageAgentTotals {
+  agentId: string;
+  name: string;
+  /** resolved avatar: uploaded image when set, otherwise the generated character */
+  avatarUrl: string | null;
+  runCount: number;
+  eventCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** null when the agent has no active `tokens` budget policy */
+  tokenBudget: AiUsageAgentTokenBudget | null;
+}
+
 export interface AiUsagePeriodSummary {
   period: AiUsagePeriod;
   label: string;
@@ -52,6 +90,8 @@ export interface AiUsagePeriodSummary {
   /** elapsed hours in the period used for the burn rate (>= 1) */
   elapsedHours: number;
   families: AiUsageFamilyTotals[];
+  /** per-agent token totals for the period, sorted by total tokens desc */
+  byAgent: AiUsageAgentTotals[];
   totals: {
     inputTokens: number | null;
     cachedInputTokens: number | null;

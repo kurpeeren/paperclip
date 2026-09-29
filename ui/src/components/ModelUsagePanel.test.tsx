@@ -71,6 +71,42 @@ const summary: AiUsageSummary = {
       from: "2026-09-28T00:00:00.000Z",
       to: "2026-09-28T12:00:00.000Z",
       elapsedHours: 12,
+      byAgent: [
+        {
+          agentId: "agent-1",
+          name: "Atlas",
+          avatarUrl: "/api/assets/asset-1/content",
+          runCount: 5,
+          eventCount: 6,
+          inputTokens: 1_000_000,
+          cachedInputTokens: 150_000,
+          outputTokens: 30_000,
+          totalTokens: 1_180_000,
+          tokenBudget: {
+            policyId: "policy-1",
+            windowKind: "calendar_day_utc",
+            windowLabel: "Daily (UTC)",
+            windowStart: "2026-09-28T00:00:00.000Z",
+            windowEnd: "2026-09-29T00:00:00.000Z",
+            limit: 2_000_000,
+            observed: 1_180_000,
+            utilizationPercent: 59,
+            hardStopEnabled: true,
+          },
+        },
+        {
+          agentId: "agent-2",
+          name: "Bolt",
+          avatarUrl: null,
+          runCount: 2,
+          eventCount: 3,
+          inputTokens: 500_000,
+          cachedInputTokens: 50_000,
+          outputTokens: 20_000,
+          totalTokens: 570_000,
+          tokenBudget: null,
+        },
+      ],
       families: [
         {
           family: "claude",
@@ -116,6 +152,7 @@ const summary: AiUsageSummary = {
       from: "2026-09-21T12:00:00.000Z",
       to: "2026-09-28T12:00:00.000Z",
       elapsedHours: 168,
+      byAgent: [],
       families: [],
       totals: {
         inputTokens: null,
@@ -134,6 +171,7 @@ const summary: AiUsageSummary = {
       from: "2026-08-29T12:00:00.000Z",
       to: "2026-09-28T12:00:00.000Z",
       elapsedHours: 720,
+      byAgent: [],
       families: [],
       totals: {
         inputTokens: null,
@@ -268,6 +306,31 @@ describe("ModelUsagePanel", () => {
     expect(container.querySelector('[data-testid="usage-summary-table"]')).toBeNull();
   });
 
+  it("renders the per-agent table with a limit bar for agents that have a token policy", async () => {
+    mockAiUsageApi.subscription.mockResolvedValue(availableUsage);
+    mockAiUsageApi.summary.mockResolvedValue(summary);
+    await render();
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="usage-agent-table"]')).not.toBeNull();
+    });
+
+    const rows = Array.from(container.querySelectorAll('[data-testid^="usage-agent-"]')).filter((el) => el.tagName === "TR");
+    expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual(["usage-agent-agent-1", "usage-agent-agent-2"]);
+
+    const atlas = container.querySelector('[data-testid="usage-agent-agent-1"]')!;
+    expect(atlas.textContent).toContain("Atlas");
+    expect(atlas.textContent).toContain("1.2M");
+    expect(atlas.querySelector("img")!.getAttribute("src")).toBe("/api/assets/asset-1/content");
+    const limit = atlas.querySelector('[data-testid="usage-agent-limit"]')!;
+    expect(limit.getAttribute("data-tone")).toBe("ok");
+    expect(limit.textContent).toContain("1.2M / 2.0M daily limit");
+    expect(limit.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("59");
+
+    const bolt = container.querySelector('[data-testid="usage-agent-agent-2"]')!;
+    expect(bolt.querySelector('[data-testid="usage-agent-limit"]')).toBeNull();
+    expect(bolt.textContent).toContain("—");
+  });
+
   it("shows a clear not-connected state when the subscription is unavailable", async () => {
     mockAiUsageApi.subscription.mockResolvedValue({
       available: false,
@@ -282,7 +345,7 @@ describe("ModelUsagePanel", () => {
     const unavailable = container.querySelector('[data-testid="usage-subscription-unavailable"]')!;
     expect(unavailable.textContent).toContain("Claude subscription not connected.");
     expect(unavailable.textContent).toContain("No Claude subscription is connected for this organization.");
-    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    expect(container.querySelector('[data-testid^="usage-gauge-"]')).toBeNull();
     // The totals table still renders independently of the subscription gauges.
     expect(container.querySelector('[data-testid="usage-summary-table"]')).not.toBeNull();
   });

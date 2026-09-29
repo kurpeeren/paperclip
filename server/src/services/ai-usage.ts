@@ -1,21 +1,28 @@
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gt, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { costEvents } from "@paperclipai/db";
+import { agents, budgetPolicies, costEvents } from "@paperclipai/db";
 import {
   AI_SUBSCRIPTION_WINDOW_LABELS,
   AI_USAGE_MODEL_FAMILY_LABELS,
   AI_USAGE_PERIOD_LABELS,
   AI_USAGE_PERIODS,
+  BUDGET_WINDOW_KIND_LABELS,
+  agentAvatarAssetUrl,
+  agentAvatarUrl,
   modelFamilyForModel,
+  resolveAgentAppearance,
   type AiSubscriptionUsage,
   type AiSubscriptionUsageWindow,
+  type AiUsageAgentTotals,
   type AiUsageFamilyTotals,
   type AiUsageModelFamily,
   type AiUsagePeriod,
   type AiUsagePeriodSummary,
   type AiUsageSummary,
+  type BudgetWindowKind,
 } from "@paperclipai/shared";
 import { aiConnectionService } from "./ai-connections.js";
+import { computeBudgetObservedAmount, resolveBudgetWindow } from "./budgets.js";
 
 export const ANTHROPIC_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const AI_USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -39,12 +46,38 @@ export interface AiUsageCostRow {
   runCount: number;
 }
 
+/** Token totals of one agent inside a period, straight from cost_events. */
+export interface AiUsageAgentRow {
+  agentId: string;
+  name: string;
+  avatarUrl: string | null;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  eventCount: number;
+  runCount: number;
+}
+
+/** An active agent-scoped `tokens` budget policy with its current-window usage. */
+export interface AiUsageAgentTokenPolicy {
+  agentId: string;
+  policyId: string;
+  windowKind: BudgetWindowKind;
+  windowStart: Date;
+  windowEnd: Date;
+  amount: number;
+  observed: number;
+  hardStopEnabled: boolean;
+}
+
 export interface AiUsageServiceDeps {
   resolveCredential?: (
     companyId: string,
     userId: string,
   ) => Promise<{ connectionId: string; grantId: string; value: string } | null>;
   loadCostRows?: (companyId: string, from: Date, to: Date) => Promise<AiUsageCostRow[]>;
+  loadAgentRows?: (companyId: string, from: Date, to: Date) => Promise<AiUsageAgentRow[]>;
+  loadAgentTokenPolicies?: (companyId: string, now: Date) => Promise<AiUsageAgentTokenPolicy[]>;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   cacheTtlMs?: number;
@@ -144,12 +177,54 @@ function perHour(value: number | null, hours: number): number | null {
   return round2(value / hours);
 }
 
+/** Per-agent totals for one period, with the agent's token budget (if any) attached. */
+export function buildAgentTotals(
+  agentRows: AiUsageAgentRow[],
+  tokenPolicies: AiUsageAgentTokenPolicy[] = [],
+): AiUsageAgentTotals[] {
+  const policyByAgent = new Map(tokenPolicies.map((policy) => [policy.agentId, policy]));
+  const totals = agentRows.map((row): AiUsageAgentTotals => {
+    const inputTokens = Number(row.inputTokens) || 0;
+    const cachedInputTokens = Number(row.cachedInputTokens) || 0;
+    const outputTokens = Number(row.outputTokens) || 0;
+    const policy = policyByAgent.get(row.agentId) ?? null;
+    return {
+      agentId: row.agentId,
+      name: row.name,
+      avatarUrl: row.avatarUrl,
+      runCount: Number(row.runCount) || 0,
+      eventCount: Number(row.eventCount) || 0,
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      totalTokens: inputTokens + cachedInputTokens + outputTokens,
+      tokenBudget: policy
+        ? {
+            policyId: policy.policyId,
+            windowKind: policy.windowKind,
+            windowLabel: BUDGET_WINDOW_KIND_LABELS[policy.windowKind],
+            windowStart: policy.windowStart.toISOString(),
+            windowEnd: policy.windowEnd.toISOString(),
+            limit: policy.amount,
+            observed: policy.observed,
+            utilizationPercent: policy.amount > 0 ? round2((policy.observed / policy.amount) * 100) : 0,
+            hardStopEnabled: policy.hardStopEnabled,
+          }
+        : null,
+    };
+  });
+  totals.sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name));
+  return totals;
+}
+
 /** Aggregate raw provider/model rows into per-family totals for one period. */
 export function buildPeriodSummary(
   period: AiUsagePeriod,
   rows: AiUsageCostRow[],
   from: Date,
   to: Date,
+  agentRows: AiUsageAgentRow[] = [],
+  tokenPolicies: AiUsageAgentTokenPolicy[] = [],
 ): AiUsagePeriodSummary {
   const elapsedHours = Math.max(1, (to.getTime() - from.getTime()) / HOUR_MS);
   const buckets = new Map<
@@ -203,6 +278,7 @@ export function buildPeriodSummary(
     to: to.toISOString(),
     elapsedHours: round2(elapsedHours),
     families,
+    byAgent: buildAgentTotals(agentRows, tokenPolicies),
     totals: {
       inputTokens: sumTokens((f) => f.inputTokens),
       cachedInputTokens: sumTokens((f) => f.cachedInputTokens),
@@ -251,6 +327,93 @@ async function loadCostRowsFromDb(db: Db, companyId: string, from: Date, to: Dat
   }));
 }
 
+async function loadAgentRowsFromDb(db: Db, companyId: string, from: Date, to: Date): Promise<AiUsageAgentRow[]> {
+  const rows = await db
+    .select({
+      agentId: costEvents.agentId,
+      name: agents.name,
+      appearance: agents.appearance,
+      avatarAssetId: agents.avatarAssetId,
+      inputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::double precision`,
+      cachedInputTokens: sql<number>`coalesce(sum(${costEvents.cachedInputTokens}), 0)::double precision`,
+      outputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::double precision`,
+      eventCount: sql<number>`count(*)::int`,
+      runCount: sql<number>`count(distinct ${costEvents.heartbeatRunId})::int`,
+    })
+    .from(costEvents)
+    .leftJoin(agents, eq(costEvents.agentId, agents.id))
+    .where(
+      and(
+        eq(costEvents.companyId, companyId),
+        gte(costEvents.occurredAt, from),
+        lte(costEvents.occurredAt, to),
+      ),
+    )
+    .groupBy(costEvents.agentId, agents.name, agents.appearance, agents.avatarAssetId);
+  return rows.map((row) => {
+    const appearance = resolveAgentAppearance(row.appearance, row.agentId);
+    return {
+      agentId: row.agentId,
+      name: row.name ?? row.agentId,
+      // Same resolution as agentService / costs.byAgent: uploaded image wins.
+      avatarUrl: row.avatarAssetId ? agentAvatarAssetUrl(row.avatarAssetId) : agentAvatarUrl(appearance, 512),
+      inputTokens: Number(row.inputTokens),
+      cachedInputTokens: Number(row.cachedInputTokens),
+      outputTokens: Number(row.outputTokens),
+      eventCount: Number(row.eventCount),
+      runCount: Number(row.runCount),
+    };
+  });
+}
+
+async function loadAgentTokenPoliciesFromDb(db: Db, companyId: string, now: Date): Promise<AiUsageAgentTokenPolicy[]> {
+  const rows = await db
+    .select()
+    .from(budgetPolicies)
+    .where(
+      and(
+        eq(budgetPolicies.companyId, companyId),
+        eq(budgetPolicies.scopeType, "agent"),
+        eq(budgetPolicies.metric, "tokens"),
+        eq(budgetPolicies.isActive, true),
+        gt(budgetPolicies.amount, 0),
+      ),
+    );
+  const policies: AiUsageAgentTokenPolicy[] = [];
+  for (const row of rows) {
+    const windowKind = row.windowKind as BudgetWindowKind;
+    const { start, end } = resolveBudgetWindow(windowKind, now);
+    const observed = await computeBudgetObservedAmount(db, row, now);
+    const existing = policies.find((policy) => policy.agentId === row.scopeId);
+    // One policy per agent in the panel: prefer the shortest window (daily > monthly > lifetime).
+    if (existing && windowRank(existing.windowKind) <= windowRank(windowKind)) continue;
+    const next: AiUsageAgentTokenPolicy = {
+      agentId: row.scopeId,
+      policyId: row.id,
+      windowKind,
+      windowStart: start,
+      windowEnd: end,
+      amount: Number(row.amount),
+      observed,
+      hardStopEnabled: row.hardStopEnabled,
+    };
+    if (existing) policies.splice(policies.indexOf(existing), 1, next);
+    else policies.push(next);
+  }
+  return policies;
+}
+
+function windowRank(windowKind: BudgetWindowKind): number {
+  switch (windowKind) {
+    case "calendar_day_utc":
+      return 0;
+    case "calendar_month_utc":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
 export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
   const connections = aiConnectionService(db);
   const resolveCredential =
@@ -259,6 +422,10 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
       connections.resolveSubscriptionCredential(companyId, userId, "anthropic"));
   const loadCostRows =
     deps.loadCostRows ?? ((companyId: string, from: Date, to: Date) => loadCostRowsFromDb(db, companyId, from, to));
+  const loadAgentRows =
+    deps.loadAgentRows ?? ((companyId: string, from: Date, to: Date) => loadAgentRowsFromDb(db, companyId, from, to));
+  const loadAgentTokenPolicies =
+    deps.loadAgentTokenPolicies ?? ((companyId: string, at: Date) => loadAgentTokenPoliciesFromDb(db, companyId, at));
   const fetchImpl = deps.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   const now = deps.now ?? (() => new Date());
   const cacheTtlMs = deps.cacheTtlMs ?? AI_USAGE_CACHE_TTL_MS;
@@ -304,14 +471,22 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
       }
     },
 
-    /** Token and cost totals per model family for today / 7 days / 30 days. */
+    /**
+     * Token and cost totals per model family and per agent for today / 7 days /
+     * 30 days. Agents with an active `tokens` budget policy carry that policy's
+     * current-window usage so the panel can show "used / limit".
+     */
     summary: async (companyId: string): Promise<AiUsageSummary> => {
       const to = now();
+      const tokenPolicies = await loadAgentTokenPolicies(companyId, to);
       const periods = await Promise.all(
         AI_USAGE_PERIODS.map(async (period) => {
           const from = periodStart(period, to);
-          const rows = await loadCostRows(companyId, from, to);
-          return buildPeriodSummary(period, rows, from, to);
+          const [rows, agentRows] = await Promise.all([
+            loadCostRows(companyId, from, to),
+            loadAgentRows(companyId, from, to),
+          ]);
+          return buildPeriodSummary(period, rows, from, to, agentRows, tokenPolicies);
         }),
       );
       return { companyId, generatedAt: to.toISOString(), periods };

@@ -4,6 +4,7 @@ import { Gauge } from "lucide-react";
 import type {
   AiSubscriptionUsage,
   AiSubscriptionUsageWindow,
+  AiUsageAgentTotals,
   AiUsagePeriod,
   AiUsagePeriodSummary,
   AiUsageSummary,
@@ -207,6 +208,93 @@ function FamilyTable({ period }: { period: AiUsagePeriodSummary }) {
   );
 }
 
+function TokenBudgetBar({ budget }: { budget: NonNullable<AiUsageAgentTotals["tokenBudget"]> }) {
+  const over = budget.observed >= budget.limit;
+  const percent = Math.min(100, Math.max(0, budget.utilizationPercent));
+  const tone: UsageTone = over ? "danger" : usageTone(percent);
+  const windowWord =
+    budget.windowKind === "calendar_day_utc" ? "daily" : budget.windowKind === "calendar_month_utc" ? "monthly" : "lifetime";
+  const label = `${formatTokens(budget.observed)} / ${formatTokens(budget.limit)} ${windowWord} limit`;
+  return (
+    <div className="min-w-28 space-y-0.5" data-testid="usage-agent-limit" data-tone={tone}>
+      <div className="relative h-1.5 w-full overflow-hidden bg-muted">
+        <div
+          role="progressbar"
+          aria-valuenow={Math.round(percent)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`${label} used`}
+          className={cn("absolute inset-y-0 left-0", TONE_FILL[tone])}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className={cn("text-(length:--text-nano) tabular-nums whitespace-nowrap", over ? TONE_TEXT.danger : "text-muted-foreground")}>
+        {label}
+        {over ? " · over" : ""}
+      </div>
+    </div>
+  );
+}
+
+/** Per-agent token totals for the selected period, plus each agent's token budget when one is set. */
+function AgentTable({ period }: { period: AiUsagePeriodSummary }) {
+  if (period.byAgent.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <h4 className="text-xs font-medium text-muted-foreground">By agent</h4>
+      <table className="w-full text-xs tabular-nums" data-testid="usage-agent-table">
+        <thead>
+          <tr className="text-muted-foreground">
+            <th className="text-left font-medium py-1">Agent</th>
+            <th className="text-right font-medium py-1">Runs</th>
+            <th className="text-right font-medium py-1">Input</th>
+            <th className="text-right font-medium py-1 hidden sm:table-cell">Cache</th>
+            <th className="text-right font-medium py-1">Output</th>
+            <th className="text-right font-medium py-1">Total</th>
+            <th className="text-right font-medium py-1">Limit</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {period.byAgent.map((agent) => (
+            <tr key={agent.agentId} data-testid={`usage-agent-${agent.agentId}`}>
+              <td className="py-1.5 text-foreground">
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  {agent.avatarUrl ? (
+                    <img
+                      src={agent.avatarUrl}
+                      alt=""
+                      width={20}
+                      height={20}
+                      loading="lazy"
+                      decoding="async"
+                      className="size-5 shrink-0 rounded-full object-cover"
+                    />
+                  ) : (
+                    <span className="size-5 shrink-0 rounded-full bg-muted" aria-hidden="true" />
+                  )}
+                  <span className="truncate">{agent.name}</span>
+                </span>
+              </td>
+              <td className="py-1.5 text-right">{agent.runCount}</td>
+              <td className="py-1.5 text-right">{formatTokens(agent.inputTokens)}</td>
+              <td className="py-1.5 text-right hidden sm:table-cell">{formatTokens(agent.cachedInputTokens)}</td>
+              <td className="py-1.5 text-right">{formatTokens(agent.outputTokens)}</td>
+              <td className="py-1.5 text-right font-medium">{formatTokens(agent.totalTokens)}</td>
+              <td className="py-1.5 pl-3 text-right">
+                {agent.tokenBudget ? (
+                  <TokenBudgetBar budget={agent.tokenBudget} />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SummarySection({
   data,
   isLoading,
@@ -245,8 +333,10 @@ function SummarySection({
       ) : selected ? (
         <>
           <FamilyTable period={selected} />
+          <AgentTable period={selected} />
           <p className="text-(length:--text-nano) text-muted-foreground">
             Burn rate averages the elapsed {selected.elapsedHours}h of this period. Tokens show “—” when an adapter reported cost only.
+            Limit bars follow the agent's token budget window, not the selected period.
           </p>
         </>
       ) : null}

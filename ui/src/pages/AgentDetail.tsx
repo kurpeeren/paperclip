@@ -17,6 +17,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
 import { activityApi } from "../api/activity";
+import { budgetsApi } from "../api/budgets";
 import { accessApi } from "../api/access";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -26,6 +27,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
+import { budgetPolicyTitle, formatBudgetUsageLine } from "../lib/budget-format";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { AgentSkillsTab } from "./agent-skills/AgentSkillsTab";
 import { AgentConfigForm } from "../components/AgentConfigForm";
@@ -105,6 +107,7 @@ import {
   isUuidLike,
   type Agent,
   type AgentDetail as AgentDetailRecord,
+  type BudgetPolicySummary,
   type HeartbeatRun,
   type HeartbeatRunEvent,
   type AgentRuntimeState,
@@ -926,6 +929,21 @@ export function AgentDetail() {
     enabled: !!resolvedCompanyId && !!resolvedAgentId && needsOverviewData,
   });
 
+  const { data: budgetOverview } = useQuery({
+    queryKey: queryKeys.budgets.overview(resolvedCompanyId ?? "__none__"),
+    queryFn: () => budgetsApi.overview(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId && needsOverviewData,
+    refetchInterval: 60_000,
+    staleTime: 15_000,
+  });
+  const agentBudgetPolicies = useMemo(
+    () =>
+      (budgetOverview?.policies ?? []).filter(
+        (policy) => policy.scopeType === "agent" && policy.scopeId === agent?.id,
+      ),
+    [agent?.id, budgetOverview?.policies],
+  );
+
   const { data: allAgents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId!),
     queryFn: () => agentsApi.list(resolvedCompanyId!),
@@ -1398,6 +1416,7 @@ export function AgentDetail() {
           directReportCount={directReports.length}
           skillNames={overviewSkillNames}
           agentRouteId={canonicalAgentRef}
+          budgetPolicies={agentBudgetPolicies}
         />
       )}
 
@@ -1711,6 +1730,7 @@ export function AgentOverview({
   directReportCount,
   skillNames,
   agentRouteId,
+  budgetPolicies = [],
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1720,6 +1740,8 @@ export function AgentOverview({
   directReportCount: number;
   skillNames: string[];
   agentRouteId: string;
+  /** budget policies scoped to this agent; each renders as "Today: 12.4M / 20M tokens (62%)" */
+  budgetPolicies?: BudgetPolicySummary[];
 }) {
   const issuesById = useMemo(() => {
     const map = new Map<string, (typeof assignedIssues)[number]>();
@@ -1792,6 +1814,60 @@ export function AgentOverview({
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No skills enabled.</p>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-border p-4" aria-labelledby="agent-budget-heading" data-testid="agent-budget-section">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 id="agent-budget-heading" className="text-sm font-medium">Budget</h3>
+            <Link className="text-xs text-muted-foreground hover:text-foreground" to={agentScopedAuditHref(agent.id, "budgets")}>Manage</Link>
+          </div>
+          {budgetPolicies.length > 0 ? (
+            <div className="space-y-3">
+              {budgetPolicies.map((policy) => {
+                const percent = policy.amount > 0 ? Math.min(100, policy.utilizationPercent) : 0;
+                const title = budgetPolicyTitle(policy.metric, policy.windowKind);
+                return (
+                  <div key={policy.policyId} className="space-y-1" data-testid={`agent-budget-${policy.metric}-${policy.windowKind}`}>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground">{title}{policy.paused ? " · paused" : ""}</span>
+                      <span
+                        className={cn(
+                          "tabular-nums",
+                          policy.status === "hard_stop"
+                            ? "text-(--status-task-blocked)"
+                            : policy.status === "warning"
+                              ? "text-(--status-task-icon-todo)"
+                              : "text-foreground",
+                        )}
+                      >
+                        {formatBudgetUsageLine(policy)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        role="progressbar"
+                        aria-valuenow={Math.round(percent)}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={`${title}: ${Math.round(percent)}% used`}
+                        className={cn(
+                          "h-full rounded-full",
+                          policy.status === "hard_stop"
+                            ? "bg-(--status-task-blocked)"
+                            : policy.status === "warning"
+                              ? "bg-(--status-task-todo)"
+                              : "bg-(--status-task-done)",
+                        )}
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No budget policies.</p>
           )}
         </section>
       </div>

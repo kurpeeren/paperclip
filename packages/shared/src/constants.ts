@@ -875,11 +875,34 @@ export type FinanceUnit = (typeof FINANCE_UNITS)[number];
 export const BUDGET_SCOPE_TYPES = ["company", "agent", "project"] as const;
 export type BudgetScopeType = (typeof BUDGET_SCOPE_TYPES)[number];
 
-export const BUDGET_METRICS = ["billed_cents"] as const;
+/**
+ * What a budget policy measures. `billed_cents` is the metered spend a
+ * provider billed; `tokens` is input + cached input + output tokens across
+ * every provider, which is the only meaningful cap on a flat subscription
+ * where every cost event bills 0 cents.
+ */
+export const BUDGET_METRICS = ["billed_cents", "tokens"] as const;
 export type BudgetMetric = (typeof BUDGET_METRICS)[number];
 
-export const BUDGET_WINDOW_KINDS = ["calendar_month_utc", "lifetime"] as const;
+export const BUDGET_METRIC_LABELS: Record<BudgetMetric, string> = {
+  billed_cents: "Billed (¢)",
+  tokens: "Tokens",
+};
+
+export const BUDGET_WINDOW_KINDS = ["calendar_month_utc", "lifetime", "calendar_day_utc"] as const;
 export type BudgetWindowKind = (typeof BUDGET_WINDOW_KINDS)[number];
+
+export const BUDGET_WINDOW_KIND_LABELS: Record<BudgetWindowKind, string> = {
+  calendar_month_utc: "Monthly (UTC)",
+  lifetime: "Lifetime",
+  calendar_day_utc: "Daily (UTC)",
+};
+
+/**
+ * Upper bound for a budget amount. Token budgets are routinely in the
+ * billions, so the columns are bigint; JS numbers stay exact up to 2^53.
+ */
+export const BUDGET_AMOUNT_MAX = Number.MAX_SAFE_INTEGER;
 
 export const BUDGET_THRESHOLD_TYPES = ["soft", "hard"] as const;
 export type BudgetThresholdType = (typeof BUDGET_THRESHOLD_TYPES)[number];

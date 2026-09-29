@@ -637,4 +637,166 @@ describeEmbeddedPostgres("budgetService release gate enforcement", () => {
     });
     expect(overviewAfterResume.activeIncidents).toHaveLength(0);
   });
+  async function insertTokenEvent(input: {
+    companyId: string;
+    agentId: string;
+    occurredAt: Date;
+    inputTokens: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+  }) {
+    const [event] = await db
+      .insert(costEvents)
+      .values({
+        companyId: input.companyId,
+        agentId: input.agentId,
+        provider: "anthropic",
+        biller: "anthropic",
+        billingType: "subscription_included",
+        model: "claude-sonnet-4-5",
+        inputTokens: input.inputTokens,
+        cachedInputTokens: input.cachedInputTokens ?? 0,
+        outputTokens: input.outputTokens ?? 0,
+        costCents: 0,
+        occurredAt: input.occurredAt,
+      })
+      .returning();
+    return event!;
+  }
+
+  it("hard-stops an agent on a daily token policy with bigint-safe amounts and resumes after the UTC day rolls over", async () => {
+    const { companyId, agentId } = await createBudgetFixture();
+    const cancelWorkForScope = vi.fn().mockResolvedValue(undefined);
+    const lateYesterday = new Date("2026-09-27T23:30:00Z");
+    const service = budgetService(db, { cancelWorkForScope, now: () => lateYesterday });
+
+    // 5 billion tokens per UTC day: far beyond a 32-bit integer.
+    const [policy] = await db.insert(budgetPolicies).values({
+      companyId,
+      scopeType: "agent",
+      scopeId: agentId,
+      metric: "tokens",
+      windowKind: "calendar_day_utc",
+      amount: 5_000_000_000,
+      warnPercent: 80,
+      hardStopEnabled: true,
+      notifyEnabled: true,
+      isActive: true,
+    }).returning();
+    expect(typeof policy!.amount).toBe("number");
+    expect(policy!.amount).toBe(5_000_000_000);
+
+    // Three events on the 27th: 2B input + 100M cached + 50M output each = 6.45B tokens, cost 0.
+    const occurredAt = new Date("2026-09-27T20:00:00Z");
+    let event = await insertTokenEvent({ companyId, agentId, occurredAt, inputTokens: 2_000_000_000, cachedInputTokens: 100_000_000, outputTokens: 50_000_000 });
+    await service.evaluateCostEvent(event);
+    event = await insertTokenEvent({ companyId, agentId, occurredAt, inputTokens: 2_000_000_000, cachedInputTokens: 100_000_000, outputTokens: 50_000_000 });
+    await service.evaluateCostEvent(event);
+    // Two events = 4.3B: over the 80% soft threshold (4B), under the hard stop.
+    let [agentRow] = await db.select({ status: agents.status, pauseReason: agents.pauseReason }).from(agents);
+    expect(agentRow).toEqual({ status: "active", pauseReason: null });
+    let incidents = await db.select().from(budgetIncidents);
+    expect(incidents.map((incident) => incident.thresholdType)).toEqual(["soft"]);
+    expect(incidents[0]).toMatchObject({ metric: "tokens", windowKind: "calendar_day_utc", amountLimit: 5_000_000_000, amountObserved: 4_300_000_000 });
+
+    event = await insertTokenEvent({ companyId, agentId, occurredAt, inputTokens: 2_000_000_000, cachedInputTokens: 100_000_000, outputTokens: 50_000_000 });
+    await service.evaluateCostEvent(event);
+
+    [agentRow] = await db.select({ status: agents.status, pauseReason: agents.pauseReason }).from(agents);
+    expect(agentRow).toEqual({ status: "paused", pauseReason: "budget" });
+    expect(cancelWorkForScope).toHaveBeenCalledWith({ companyId, scopeType: "agent", scopeId: agentId });
+    incidents = await db.select().from(budgetIncidents);
+    const hardIncident = incidents.find((incident) => incident.thresholdType === "hard")!;
+    expect(hardIncident).toMatchObject({
+      metric: "tokens",
+      windowKind: "calendar_day_utc",
+      windowStart: new Date("2026-09-27T00:00:00Z"),
+      windowEnd: new Date("2026-09-28T00:00:00Z"),
+      amountLimit: 5_000_000_000,
+      amountObserved: 6_450_000_000,
+      status: "open",
+    });
+    expect(typeof hardIncident.amountObserved).toBe("number");
+    expect(incidents.find((incident) => incident.thresholdType === "soft")!.status).toBe("resolved");
+
+    const overview = await service.overview(companyId);
+    expect(overview.policies[0]).toMatchObject({
+      metric: "tokens",
+      windowKind: "calendar_day_utc",
+      amount: 5_000_000_000,
+      observedAmount: 6_450_000_000,
+      remainingAmount: 0,
+      utilizationPercent: 129,
+      status: "hard_stop",
+      paused: true,
+      pauseReason: "budget",
+      windowStart: new Date("2026-09-27T00:00:00Z"),
+      windowEnd: new Date("2026-09-28T00:00:00Z"),
+    });
+    expect(overview.pausedAgentCount).toBe(1);
+    expect(await service.getInvocationBlock(companyId, agentId)).toMatchObject({ scopeType: "agent", scopeId: agentId });
+
+    // Still the same UTC day: the sweep must leave the pause in place.
+    expect((await service.reconcileWindowRollovers()).resumed).toEqual([]);
+    [agentRow] = await db.select({ status: agents.status, pauseReason: agents.pauseReason }).from(agents);
+    expect(agentRow).toEqual({ status: "paused", pauseReason: "budget" });
+
+    // A new UTC day: usage in the current window is 0, so the agent resumes and the incident resolves.
+    const nextDay = budgetService(db, { cancelWorkForScope, now: () => new Date("2026-09-28T00:05:00Z") });
+    expect((await nextDay.reconcileWindowRollovers()).resumed).toEqual([{ companyId, scopeType: "agent", scopeId: agentId }]);
+    [agentRow] = await db.select({ status: agents.status, pauseReason: agents.pauseReason }).from(agents);
+    expect(agentRow).toEqual({ status: "idle", pauseReason: null });
+    incidents = await db.select().from(budgetIncidents);
+    expect(incidents.every((incident) => incident.status === "resolved")).toBe(true);
+    expect(await nextDay.getInvocationBlock(companyId, agentId)).toBeNull();
+    const overviewAfter = await nextDay.overview(companyId);
+    expect(overviewAfter.policies[0]).toMatchObject({
+      observedAmount: 0,
+      remainingAmount: 5_000_000_000,
+      status: "ok",
+      paused: false,
+      windowStart: new Date("2026-09-28T00:00:00Z"),
+    });
+    expect(overviewAfter.activeIncidents).toEqual([]);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "budget.window_rolled_over", entityId: agentId }),
+    );
+    // Idempotent: nothing left to resume.
+    expect((await nextDay.reconcileWindowRollovers()).resumed).toEqual([]);
+  });
+
+  it("keeps dollar and token policies on the same agent independent and blocks invocation on either hard stop", async () => {
+    const { companyId, agentId } = await createBudgetFixture();
+    const now = new Date("2026-09-28T12:00:00Z");
+    const service = budgetService(db, { now: () => now });
+
+    await service.upsertPolicy(companyId, { scopeType: "agent", scopeId: agentId, metric: "billed_cents", windowKind: "calendar_month_utc", amount: 10_000 }, "board-user");
+    const tokenPolicy = await service.upsertPolicy(companyId, { scopeType: "agent", scopeId: agentId, metric: "tokens", windowKind: "calendar_day_utc", amount: 1_000 }, "board-user");
+    expect(tokenPolicy).toMatchObject({ metric: "tokens", windowKind: "calendar_day_utc", amount: 1_000, observedAmount: 0, status: "ok" });
+
+    // The monthly dollar mirror on the agent row is untouched by the token policy.
+    const [agentBudget] = await db.select({ budgetMonthlyCents: agents.budgetMonthlyCents }).from(agents);
+    expect(agentBudget?.budgetMonthlyCents).toBe(10_000);
+
+    // Yesterday's tokens do not count toward today's daily window.
+    await insertTokenEvent({ companyId, agentId, occurredAt: new Date("2026-09-27T12:00:00Z"), inputTokens: 5_000 });
+    const event = await insertTokenEvent({ companyId, agentId, occurredAt: new Date("2026-09-28T11:00:00Z"), inputTokens: 900, outputTokens: 100 });
+    await service.evaluateCostEvent(event);
+
+    const overview = await service.overview(companyId);
+    const tokens = overview.policies.find((policy) => policy.metric === "tokens")!;
+    const dollars = overview.policies.find((policy) => policy.metric === "billed_cents")!;
+    expect(tokens).toMatchObject({ observedAmount: 1_000, status: "hard_stop", paused: true });
+    expect(dollars).toMatchObject({ observedAmount: 0, status: "ok" });
+    expect(await service.getInvocationBlock(companyId, agentId)).toMatchObject({
+      scopeType: "agent",
+      reason: "Agent is paused because its budget hard-stop was reached.",
+    });
+
+    // Raising the token limit above observed usage resumes the agent immediately.
+    const raised = await service.upsertPolicy(companyId, { scopeType: "agent", scopeId: agentId, metric: "tokens", windowKind: "calendar_day_utc", amount: 20_000_000 }, "board-user");
+    expect(raised).toMatchObject({ amount: 20_000_000, observedAmount: 1_000, status: "ok", paused: false });
+    expect(await service.getInvocationBlock(companyId, agentId)).toBeNull();
+  });
 });

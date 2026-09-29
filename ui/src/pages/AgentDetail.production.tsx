@@ -56,6 +56,7 @@ import { InlineBanner } from "../components/InlineBanner";
 import { BuiltInBundlePanel } from "../components/BuiltInBundlePanel";
 import { ConfigureBuiltInAgentModal } from "../components/ConfigureBuiltInAgentModal";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { BudgetPolicyForm } from "../components/BudgetPolicyForm";
 import { TrustPresetSection } from "../components/TrustPresetSection";
 import { FileTree, buildFileTree } from "../components/FileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
@@ -109,6 +110,7 @@ import {
   type Agent,
   type AgentDetail as AgentDetailRecord,
   type BudgetPolicySummary,
+  type BudgetPolicyUpsertInput,
   type HeartbeatRun,
   type HeartbeatRunEvent,
   type AgentRuntimeState,
@@ -921,7 +923,11 @@ export function AgentDetail() {
   const directReports = (allAgents ?? []).filter((a) => a.reportsTo === agent?.id && a.status !== "terminated");
   const agentBudgetSummary = useMemo(() => {
     const matched = budgetOverview?.policies.find(
-      (policy) => policy.scopeType === "agent" && policy.scopeId === (agent?.id ?? routeAgentRef),
+      (policy) =>
+        policy.scopeType === "agent" &&
+        policy.scopeId === (agent?.id ?? routeAgentRef) &&
+        policy.metric === "billed_cents" &&
+        policy.windowKind === "calendar_month_utc",
     );
     if (matched) return matched;
     const budgetMonthlyCents = agent?.budgetMonthlyCents ?? 0;
@@ -950,6 +956,17 @@ export function AgentDetail() {
       windowEnd: new Date(),
     } satisfies BudgetPolicySummary;
   }, [agent, budgetOverview?.policies, resolvedCompanyId, routeAgentRef]);
+  // Every other policy on this agent (token caps, daily windows, lifetime spend).
+  const agentExtraPolicies = useMemo(
+    () =>
+      (budgetOverview?.policies ?? []).filter(
+        (policy) =>
+          policy.scopeType === "agent" &&
+          policy.scopeId === (agent?.id ?? routeAgentRef) &&
+          !(policy.metric === "billed_cents" && policy.windowKind === "calendar_month_utc"),
+      ),
+    [agent?.id, budgetOverview?.policies, routeAgentRef],
+  );
   const mobileLiveRun = useMemo(
     () => (heartbeats ?? []).find((r) => r.status === "running" || r.status === "queued") ?? null,
     [heartbeats],
@@ -1022,13 +1039,7 @@ export function AgentDetail() {
   });
 
   const budgetMutation = useMutation({
-    mutationFn: (amount: number) =>
-      budgetsApi.upsertPolicy(resolvedCompanyId!, {
-        scopeType: "agent",
-        scopeId: agent?.id ?? routeAgentRef,
-        amount,
-        windowKind: "calendar_month_utc",
-      }),
+    mutationFn: (input: BudgetPolicyUpsertInput) => budgetsApi.upsertPolicy(resolvedCompanyId!, input),
     onSuccess: () => {
       if (!resolvedCompanyId) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.budgets.overview(resolvedCompanyId) });
@@ -1562,12 +1573,45 @@ export function AgentDetail() {
       ) : null}
 
       {activeView === "budget" && resolvedCompanyId ? (
-        <div className="max-w-3xl">
+        <div className="max-w-3xl space-y-10">
           <BudgetPolicyCard
             summary={agentBudgetSummary}
             isSaving={budgetMutation.isPending}
-            onSave={(amount) => budgetMutation.mutate(amount)}
+            onSave={(amount) =>
+              budgetMutation.mutate({
+                scopeType: "agent",
+                scopeId: agent.id,
+                metric: "billed_cents",
+                windowKind: "calendar_month_utc",
+                amount,
+              })}
             variant="plain"
+          />
+          {agentExtraPolicies.map((policy) => (
+            <BudgetPolicyCard
+              key={policy.policyId}
+              summary={policy}
+              isSaving={budgetMutation.isPending}
+              onSave={(amount) =>
+                budgetMutation.mutate({
+                  scopeType: "agent",
+                  scopeId: agent.id,
+                  metric: policy.metric,
+                  windowKind: policy.windowKind,
+                  amount,
+                })}
+              variant="plain"
+            />
+          ))}
+          <BudgetPolicyForm
+            scopeType="agent"
+            scopeId={agent.id}
+            existing={budgetOverview?.policies ?? []}
+            onSubmit={(input) => budgetMutation.mutate(input)}
+            isSaving={budgetMutation.isPending}
+            defaultMetric="tokens"
+            variant="plain"
+            title="Add a token or spend limit"
           />
         </div>
       ) : null}

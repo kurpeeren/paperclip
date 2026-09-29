@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, pgTable, text, timestamp, uuid, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, index, pgTable, text, timestamp, uuid, uniqueIndex } from "drizzle-orm/pg-core";
 import { approvals } from "./approvals.js";
 import { budgetPolicies } from "./budget_policies.js";
 import { companies } from "./companies.js";
@@ -17,8 +17,9 @@ export const budgetIncidents = pgTable(
     windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
     windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
     thresholdType: text("threshold_type").notNull(),
-    amountLimit: integer("amount_limit").notNull(),
-    amountObserved: integer("amount_observed").notNull(),
+    // bigint: mirrors budget_policies.amount so token incidents never overflow.
+    amountLimit: bigint("amount_limit", { mode: "number" }).notNull(),
+    amountObserved: bigint("amount_observed", { mode: "number" }).notNull(),
     status: text("status").notNull().default("open"),
     approvalId: uuid("approval_id").references(() => approvals.id),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
