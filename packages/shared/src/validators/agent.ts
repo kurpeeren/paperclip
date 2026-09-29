@@ -148,6 +148,12 @@ export const updateAgentSchema = objectWithoutDefaults(
   .extend({
     permissions: z.never().optional(),
     replaceAdapterConfig: z.boolean().optional(),
+    /**
+     * Remove the agent's AI connection binding. Needed when moving an agent to a harness that
+     * takes no provider connection (e.g. opencode_local against a local Ollama model); without it
+     * the previous binding is carried over and rejected as incompatible with the new harness.
+     */
+    clearAiConnection: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),
   });

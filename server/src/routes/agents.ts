@@ -5236,6 +5236,8 @@ export function agentRoutes(
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+    const clearAiConnection = patchData.clearAiConnection === true;
+    delete patchData.clearAiConnection;
     // The apply-existing flag is not an agent column. The server binds the fixed
     // reference to the owner stored value with no login round trip. Remove it
     // from the patch so it never reaches the update values.
@@ -5365,8 +5367,16 @@ export function agentRoutes(
         adapterConfig: patchData.adapterConfig,
       });
     }
-    if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
-    const nextAiBinding = aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
+    if (clearAiConnection) {
+      await assertCanUpdateAgent(req, existing);
+      const { aiConnection: _cleared, ...rest } = (requestedRuntimeConfig ?? asRecord(existing.runtimeConfig) ?? {}) as Record<string, unknown>;
+      requestedRuntimeConfig = rest;
+    } else if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) {
+      requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
+    }
+    const nextAiBinding = clearAiConnection
+      ? undefined
+      : aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
     if (nextAiBinding) {
       await assertCanUpdateAgent(req, existing);
       const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existing.runtimeConfig.aiConnection);
