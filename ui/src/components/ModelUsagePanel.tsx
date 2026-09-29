@@ -104,10 +104,14 @@ function SubscriptionSection({
   data,
   isLoading,
   error,
+  providerLabel = "Claude",
+  connectHint = "Connect a Claude subscription as an agent's AI connection to see live quota here.",
 }: {
   data: AiSubscriptionUsage | undefined;
   isLoading: boolean;
   error: Error | null;
+  providerLabel?: string;
+  connectHint?: string;
 }) {
   if (isLoading) {
     return (
@@ -120,7 +124,7 @@ function SubscriptionSection({
   if (error) {
     return (
       <p className="text-sm text-destructive" data-testid="usage-subscription-error">
-        Could not load Claude subscription usage: {error.message}
+        Could not load {providerLabel} subscription usage: {error.message}
       </p>
     );
   }
@@ -128,11 +132,9 @@ function SubscriptionSection({
   if (!data.available) {
     return (
       <div className="space-y-1" data-testid="usage-subscription-unavailable">
-        <p className="text-sm text-foreground">Claude subscription not connected.</p>
+        <p className="text-sm text-foreground">{providerLabel} subscription not connected.</p>
         <p className="text-xs text-muted-foreground">{data.reason}</p>
-        <p className="text-xs text-muted-foreground">
-          Connect a Claude subscription as an agent's AI connection to see live quota here.
-        </p>
+        <p className="text-xs text-muted-foreground">{connectHint}</p>
       </div>
     );
   }
@@ -269,6 +271,13 @@ export function ModelUsagePanel({ companyId }: { companyId: string }) {
     refetchInterval: MODEL_USAGE_REFRESH_MS,
     staleTime: 60_000,
   });
+  const antigravity = useQuery({
+    queryKey: queryKeys.aiUsageAntigravity(companyId),
+    queryFn: () => aiUsageApi.antigravity(companyId),
+    enabled: !!companyId,
+    refetchInterval: MODEL_USAGE_REFRESH_MS,
+    staleTime: 60_000,
+  });
   const summary = useQuery({
     queryKey: queryKeys.aiUsageSummary(companyId),
     queryFn: () => aiUsageApi.summary(companyId),
@@ -286,7 +295,7 @@ export function ModelUsagePanel({ companyId }: { companyId: string }) {
             Model usage
           </h3>
           <p className="text-(length:--text-nano) text-muted-foreground/60">
-            Claude subscription quota and token burn · refreshes every 5 minutes
+            Claude and Antigravity subscription quotas and token burn · refreshes every 5 minutes
           </p>
         </div>
         <Link to="/costs" className="text-xs underline underline-offset-2 text-muted-foreground shrink-0">
@@ -300,6 +309,16 @@ export function ModelUsagePanel({ companyId }: { companyId: string }) {
             data={subscription.data}
             isLoading={subscription.isLoading}
             error={subscription.error as Error | null}
+          />
+        </div>
+        <div className="space-y-3">
+          <h4 className="text-xs font-medium text-muted-foreground">Antigravity (Google) subscription</h4>
+          <SubscriptionSection
+            data={antigravity.data}
+            isLoading={antigravity.isLoading}
+            error={antigravity.error as Error | null}
+            providerLabel="Antigravity"
+            connectHint="Sign in to the agy CLI on the Paperclip host (agy login) to see Google Antigravity quota here."
           />
         </div>
         <SummarySection data={summary.data} isLoading={summary.isLoading} error={summary.error as Error | null} />

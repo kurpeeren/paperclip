@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import os from "node:os";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { costEvents } from "@paperclipai/db";
@@ -7,6 +9,7 @@ import {
   AI_USAGE_PERIOD_LABELS,
   AI_USAGE_PERIODS,
   modelFamilyForModel,
+  type AiSubscriptionProvider,
   type AiSubscriptionUsage,
   type AiSubscriptionUsageWindow,
   type AiUsageFamilyTotals,
@@ -19,6 +22,11 @@ import { aiConnectionService } from "./ai-connections.js";
 
 export const ANTHROPIC_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const AI_USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+/** Google Antigravity CLI: `agy -p /usage` prints the subscription quota table without a model call. */
+export const ANTIGRAVITY_USAGE_COMMAND = "agy";
+export const ANTIGRAVITY_USAGE_ARGS = ["--output-format", "text", "-p", "/usage"];
+const ANTIGRAVITY_USAGE_TIMEOUT_MS = 45_000;
+const ANTIGRAVITY_CACHE_KEY = "antigravity";
 const UPSTREAM_TIMEOUT_MS = 8_000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -46,6 +54,8 @@ export interface AiUsageServiceDeps {
   ) => Promise<{ connectionId: string; grantId: string; value: string } | null>;
   loadCostRows?: (companyId: string, from: Date, to: Date) => Promise<AiUsageCostRow[]>;
   fetchImpl?: typeof fetch;
+  /** Runs the Antigravity CLI usage command and resolves with its stdout (overridable for tests). */
+  runAntigravityUsage?: () => Promise<string>;
   now?: () => Date;
   cacheTtlMs?: number;
 }
@@ -79,14 +89,73 @@ export function clearAiUsageCache() {
   backoffCache.clear();
 }
 
-function staleOrUnavailable(cacheKey: string, reason: string): AiSubscriptionUsage {
+function staleOrUnavailable(
+  cacheKey: string,
+  reason: string,
+  provider: AiSubscriptionProvider = "anthropic",
+): AiSubscriptionUsage {
   const lastGood = lastGoodCache.get(cacheKey);
   if (lastGood) return { ...lastGood, stale: true, staleReason: reason };
-  return unavailable(reason);
+  return unavailable(reason, provider);
 }
 
-function unavailable(reason: string): AiSubscriptionUsage {
-  return { available: false, provider: "anthropic", reason };
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Parse the tab-separated table printed by `agy -p /usage`, e.g.
+ * `Gemini Models\tFive Hour Limit Remaining\t97%\t2026-09-28T17:28:16Z`.
+ * The CLI reports the REMAINING share, so utilization is its complement.
+ */
+export function parseAntigravityUsageOutput(text: string): AiSubscriptionUsageWindow[] {
+  const windows: AiSubscriptionUsageWindow[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const parts = rawLine.split("\t").map((part) => part.trim());
+    if (parts.length < 3) continue;
+    const [group, rawLabel, rawPercent, rawReset] = parts;
+    const match = /^(\d+(?:\.\d+)?)\s*%$/.exec(rawPercent ?? "");
+    if (!group || !rawLabel || !match) continue;
+    const remaining = Number(match[1]);
+    const kind = /week/i.test(rawLabel) ? "seven_day" : /five\s*hour|5[- ]hour/i.test(rawLabel) ? "five_hour" : slug(rawLabel);
+    const kindLabel = kind === "five_hour" ? "5-hour window" : kind === "seven_day" ? "7-day window" : rawLabel;
+    const resetsAt = rawReset && !Number.isNaN(Date.parse(rawReset)) ? new Date(rawReset).toISOString() : null;
+    windows.push({
+      key: `antigravity_${slug(group)}_${kind}`,
+      label: `${group} · ${kindLabel}`,
+      utilization: Math.min(100, Math.max(0, 100 - remaining)),
+      resetsAt,
+    });
+  }
+  return windows;
+}
+
+function runAntigravityUsageCommand(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ANTIGRAVITY_USAGE_COMMAND,
+      ANTIGRAVITY_USAGE_ARGS,
+      {
+        cwd: os.tmpdir(),
+        timeout: ANTIGRAVITY_USAGE_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, CI: "1", NO_COLOR: "1", TERM: "dumb" },
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") return reject(new Error("agy CLI not found on the server PATH"));
+          if (error.killed) return reject(new Error("agy did not respond in time"));
+          return reject(new Error(String(stderr || error.message).trim().slice(0, 200)));
+        }
+        resolve(String(stdout));
+      },
+    );
+  });
+}
+
+function unavailable(reason: string, provider: AiSubscriptionProvider = "anthropic"): AiSubscriptionUsage {
+  return { available: false, provider, reason };
 }
 
 function clampPercent(value: number): number {
@@ -281,6 +350,7 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
   const loadCostRows =
     deps.loadCostRows ?? ((companyId: string, from: Date, to: Date) => loadCostRowsFromDb(db, companyId, from, to));
   const fetchImpl = deps.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
+  const runAntigravityUsage = deps.runAntigravityUsage ?? runAntigravityUsageCommand;
   const now = deps.now ?? (() => new Date());
   const cacheTtlMs = deps.cacheTtlMs ?? AI_USAGE_CACHE_TTL_MS;
 
@@ -322,7 +392,7 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
         return value;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const rateLimited = /429/.test(message);
+        const rateLimited = /\b429\b/.test(message);
         const reason = /abort/i.test(message)
           ? "The Anthropic usage API did not respond in time."
           : rateLimited
@@ -333,6 +403,39 @@ export function aiUsageService(db: Db, deps: AiUsageServiceDeps = {}) {
           reason,
         });
         return staleOrUnavailable(cacheKey, reason);
+      }
+    },
+
+    /**
+     * Google Antigravity subscription quota, read from the locally signed-in
+     * `agy` CLI on the server host (machine-level, not per user). Never throws
+     * for expected conditions: a missing CLI or a failed run returns
+     * `{ available: false, reason }` or the last good reading flagged stale.
+     */
+    antigravityUsage: async (): Promise<AiSubscriptionUsage> => {
+      const nowMs = now().getTime();
+      const cached = subscriptionCache.get(ANTIGRAVITY_CACHE_KEY);
+      if (cached && cached.expiresAt > nowMs) return cached.value;
+      const backoff = backoffCache.get(ANTIGRAVITY_CACHE_KEY);
+      if (backoff && backoff.until > nowMs) return staleOrUnavailable(ANTIGRAVITY_CACHE_KEY, backoff.reason, "antigravity");
+      try {
+        const windows = parseAntigravityUsageOutput(await runAntigravityUsage());
+        if (windows.length === 0) throw new Error("agy /usage printed no quota rows");
+        const value: Extract<AiSubscriptionUsage, { available: true }> = {
+          available: true,
+          provider: "antigravity",
+          windows,
+          fetchedAt: new Date(nowMs).toISOString(),
+        };
+        subscriptionCache.set(ANTIGRAVITY_CACHE_KEY, { expiresAt: nowMs + cacheTtlMs, value });
+        lastGoodCache.set(ANTIGRAVITY_CACHE_KEY, value);
+        backoffCache.delete(ANTIGRAVITY_CACHE_KEY);
+        return value;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const reason = `Could not load Antigravity usage (${message}).`;
+        backoffCache.set(ANTIGRAVITY_CACHE_KEY, { until: nowMs + AI_USAGE_ERROR_BACKOFF_MS, reason });
+        return staleOrUnavailable(ANTIGRAVITY_CACHE_KEY, reason, "antigravity");
       }
     },
 

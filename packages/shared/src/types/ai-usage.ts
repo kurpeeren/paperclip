@@ -12,10 +12,13 @@ export interface AiSubscriptionUsageWindow {
   resetsAt: string | null;
 }
 
+/** Subscription providers whose quota windows the dashboard can render. */
+export type AiSubscriptionProvider = "anthropic" | "antigravity";
+
 export type AiSubscriptionUsage =
   | {
       available: true;
-      provider: "anthropic";
+      provider: AiSubscriptionProvider;
       windows: AiSubscriptionUsageWindow[];
       /** iso timestamp of the upstream fetch (cached responses keep the original) */
       fetchedAt: string;
@@ -26,7 +29,7 @@ export type AiSubscriptionUsage =
     }
   | {
       available: false;
-      provider: "anthropic";
+      provider: AiSubscriptionProvider;
       /** human-readable reason; never contains credential material */
       reason: string;
     };
