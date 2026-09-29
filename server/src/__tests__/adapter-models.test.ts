@@ -174,6 +174,7 @@ describe("adapter model listing", () => {
     ["gemini_local", ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview"]],
     ["grok_local", ["grok-build", "grok-4.7", "grok-4.6", "grok-4.5"]],
     ["kimi_local", ["kimi-code/kimi-for-coding", "kimi-code/k3", "kimi-code/k3-256k"]],
+    ["antigravity_local", ["gemini-3.8-flash-medium", "gemini-3.8-flash-high", "gemini-3.1-pro-high"]],
   ])("lists current %s models without a provider login", async (adapter, expectedIds) => {
     const models = await listAdapterModels(adapter as string);
     expect(models.map((model) => model.id)).toEqual(expect.arrayContaining(expectedIds as string[]));

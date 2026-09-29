@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AI_USAGE_ERROR_BACKOFF_MS,
+  AI_USAGE_RATE_LIMIT_BACKOFF_MS,
   ANTHROPIC_OAUTH_USAGE_URL,
   aiUsageService,
   buildAgentTotals,
   buildPeriodSummary,
   clearAiUsageCache,
   parseAnthropicUsagePayload,
+  parseAntigravityUsageOutput,
   type AiUsageAgentRow,
   type AiUsageAgentTokenPolicy,
   type AiUsageCostRow,
@@ -55,6 +58,32 @@ describe("parseAnthropicUsagePayload", () => {
   it("returns no windows for a non-object payload", () => {
     expect(parseAnthropicUsagePayload(null)).toEqual([]);
     expect(parseAnthropicUsagePayload("nope")).toEqual([]);
+  });
+});
+
+describe("parseAntigravityUsageOutput", () => {
+  it("turns the agy /usage table into utilization windows", () => {
+    const text = [
+      "Gemini Models\tWeekly Limit Remaining\t100%\t2026-10-05T08:45:21Z",
+      "Gemini Models\tFive Hour Limit Remaining\t97%\t2026-09-28T17:28:16Z",
+      "Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-09-28T22:13:26Z",
+      "not a quota line",
+    ].join("\n");
+    const windows = parseAntigravityUsageOutput(text);
+    expect(windows).toHaveLength(3);
+    expect(windows[0]).toEqual({
+      key: "antigravity_gemini_models_seven_day",
+      label: "Gemini Models · 7-day window",
+      utilization: 0,
+      resetsAt: "2026-10-05T08:45:21.000Z",
+    });
+    expect(windows[1]?.key).toBe("antigravity_gemini_models_five_hour");
+    expect(windows[1]?.utilization).toBe(3);
+    expect(windows[2]?.key).toBe("antigravity_claude_and_gpt_models_five_hour");
+  });
+
+  it("ignores rows without a percentage", () => {
+    expect(parseAntigravityUsageOutput("Gemini Models\tSomething\tn/a\t")).toEqual([]);
   });
 });
 
@@ -159,7 +188,7 @@ describe("aiUsageService.subscriptionUsage", () => {
     expect(JSON.stringify(result)).not.toContain("boom");
   });
 
-  it("reports available:false on upstream HTTP errors and does not cache them", async () => {
+  it("reports available:false on upstream HTTP errors and backs off before retrying", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(okResponse({ error: "unauthorized" }, 401))
@@ -175,9 +204,47 @@ describe("aiUsageService.subscriptionUsage", () => {
       provider: "anthropic",
       reason: "Could not load Claude subscription usage (Anthropic usage API returned 401).",
     });
+    // Inside the failure backoff the upstream is not asked again.
+    clock += 30_000;
+    const stillFailed = await service.subscriptionUsage("company-1", "user-1");
+    expect(stillFailed.available).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // After the backoff the next call refreshes and recovers.
+    clock += AI_USAGE_ERROR_BACKOFF_MS;
     const recovered = await service.subscriptionUsage("company-1", "user-1");
     expect(recovered.available).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the last good reading flagged stale when a refresh is rate limited", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(okResponse(USAGE_BODY))
+      .mockResolvedValueOnce(okResponse({ error: "rate limited" }, 429));
+    const service = aiUsageService(db, {
+      resolveCredential: async () => credential,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now,
+      cacheTtlMs: 1_000,
+    });
+    const first = await service.subscriptionUsage("company-1", "user-1");
+    expect(first.available).toBe(true);
+    clock += 2_000;
+    const stale = await service.subscriptionUsage("company-1", "user-1");
+    expect(stale.available).toBe(true);
+    if (!stale.available) throw new Error("unreachable");
+    expect(stale.stale).toBe(true);
+    expect(stale.staleReason).toMatch(/429/);
+    expect(stale.windows).toEqual(first.available ? first.windows : []);
+    // A 429 backs off for longer than an ordinary failure.
+    clock += AI_USAGE_ERROR_BACKOFF_MS + 1_000;
+    await service.subscriptionUsage("company-1", "user-1");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    clock += AI_USAGE_RATE_LIMIT_BACKOFF_MS;
+    fetchImpl.mockResolvedValueOnce(okResponse(USAGE_BODY));
+    const fresh = await service.subscriptionUsage("company-1", "user-1");
+    expect(fresh.available && !fresh.stale).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("reports a timeout reason when the upstream call aborts", async () => {
@@ -194,6 +261,52 @@ describe("aiUsageService.subscriptionUsage", () => {
       available: false,
       provider: "anthropic",
       reason: "The Anthropic usage API did not respond in time.",
+    });
+  });
+});
+
+describe("aiUsageService.antigravityUsage", () => {
+  const db = {} as any;
+  let clock = Date.parse("2026-09-28T12:00:00Z");
+  const now = () => new Date(clock);
+  const TABLE = "Gemini Models\tFive Hour Limit Remaining\t97%\t2026-09-28T17:28:16Z\n";
+
+  beforeEach(() => {
+    clearAiUsageCache();
+    clock = Date.parse("2026-09-28T12:00:00Z");
+  });
+
+  it("parses the CLI table, caches it, and degrades to stale on failure", async () => {
+    const runAntigravityUsage = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce(TABLE)
+      .mockRejectedValueOnce(new Error("agy did not respond in time"));
+    const service = aiUsageService(db, { runAntigravityUsage, now, cacheTtlMs: 1_000 });
+    const first = await service.antigravityUsage();
+    expect(first.available).toBe(true);
+    if (!first.available) throw new Error("unreachable");
+    expect(first.provider).toBe("antigravity");
+    expect(first.windows[0]?.utilization).toBe(3);
+    await service.antigravityUsage();
+    expect(runAntigravityUsage).toHaveBeenCalledTimes(1);
+    clock += 2_000;
+    const stale = await service.antigravityUsage();
+    expect(stale.available && stale.stale).toBe(true);
+    expect(runAntigravityUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports unavailable when the CLI is missing and nothing was cached", async () => {
+    const service = aiUsageService(db, {
+      runAntigravityUsage: async () => {
+        throw new Error("agy CLI not found on the server PATH");
+      },
+      now,
+    });
+    const result = await service.antigravityUsage();
+    expect(result).toEqual({
+      available: false,
+      provider: "antigravity",
+      reason: "Could not load Antigravity usage (agy CLI not found on the server PATH).",
     });
   });
 });

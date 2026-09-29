@@ -101,6 +101,11 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Kimi Code CLI harness",
     icon: Moon,
   },
+  antigravity_local: {
+    label: "Antigravity",
+    description: "Google Antigravity CLI (agy) harness, subscription-billed Gemini models",
+    icon: Sparkles,
+  },
   hermes_gateway: {
     label: "Hermes Gateway",
     description: "Remote Hermes API server",

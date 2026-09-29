@@ -85,6 +85,17 @@ import {
   models as grokModels,
 } from "@paperclipai/adapter-grok-local";
 import {
+  execute as antigravityExecute,
+  listAntigravitySkills,
+  syncAntigravitySkills,
+  testEnvironment as antigravityTestEnvironment,
+  sessionCodec as antigravitySessionCodec,
+} from "@paperclipai/adapter-antigravity-local/server";
+import {
+  agentConfigurationDoc as antigravityAgentConfigurationDoc,
+  models as antigravityModels,
+} from "@paperclipai/adapter-antigravity-local";
+import {
   execute as kimiExecute,
   listKimiSkills,
   syncKimiSkills,
@@ -778,6 +789,29 @@ const kimiLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: kimiAgentConfigurationDoc,
 };
 
+const antigravityLocalAdapter: ServerAdapterModule = {
+  type: "antigravity_local",
+  runtimeToolDelivery: "environment",
+  execute: antigravityExecute,
+  testEnvironment: antigravityTestEnvironment,
+  listSkills: listAntigravitySkills,
+  syncSkills: syncAntigravitySkills,
+  sessionCodec: antigravitySessionCodec,
+  sessionManagement: getAdapterSessionManagement("antigravity_local") ?? undefined,
+  models: antigravityModels,
+  supportsLocalAgentJwt: true,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: true,
+  // agy is distributed by Google's own installer, not npm: no sandbox install command.
+  getRuntimeCommandSpec: (config) => ({
+    command: readConfiguredCommand(config, "agy"),
+    detectCommand: readConfiguredCommand(config, "agy"),
+    installCommand: null,
+  }),
+  agentConfigurationDoc: antigravityAgentConfigurationDoc,
+};
+
 const hermesGatewayAdapter: ServerAdapterModule = {
   ...createHermesGatewayServerAdapter(),
   runtimeToolDelivery: "invocation_context",
@@ -863,6 +897,7 @@ function registerBuiltInAdapters() {
     geminiLocalAdapter,
     grokLocalAdapter,
     kimiLocalAdapter,
+    antigravityLocalAdapter,
     hermesGatewayAdapter,
     hermesLocalAdapter,
     openclawGatewayAdapter,

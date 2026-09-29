@@ -215,6 +215,7 @@ export async function prepareConnectorSkillDelivery(
 ) {
   const scopedFiles =
     adapterType === "paperclip_runner" ||
+    adapterType === "antigravity_local" ||
     (config.engine === "cli" &&
       ["codex_local", "claude_local", "kimi_local"].includes(adapterType));
   if (scopedFiles) {

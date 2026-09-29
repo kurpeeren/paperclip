@@ -35,6 +35,12 @@ export function aiUsageRoutes(db: Db, options: { deps?: AiUsageServiceDeps } = {
     res.json(result);
   });
 
+  router.get("/companies/:companyId/ai-usage/antigravity", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    if (!(await resolveCompany(req, res, companyId))) return;
+    res.json(await usage.antigravityUsage());
+  });
+
   router.get("/companies/:companyId/ai-usage/summary", async (req, res) => {
     const companyId = req.params.companyId as string;
     if (!(await resolveCompany(req, res, companyId))) return;

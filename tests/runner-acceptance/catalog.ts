@@ -17,6 +17,7 @@ const excludedBuiltInAdapterTypes = new Set(["paperclip_runner", "pi_local"]);
 
 const directBuiltInAdapterTypes = [
   "acpx_local",
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "cursor_cloud",

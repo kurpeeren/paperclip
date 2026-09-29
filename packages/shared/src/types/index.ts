@@ -977,6 +977,7 @@ export type {
 } from "./access.js";
 export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
 export type {
+  AiSubscriptionProvider,
   AiSubscriptionUsage,
   AiSubscriptionUsageWindow,
   AiUsageAgentTokenBudget,

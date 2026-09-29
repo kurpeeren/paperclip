@@ -1621,6 +1621,7 @@ export type {
   OAuthRedirectConstraints,
   QuotaWindow,
   ProviderQuotaResult,
+  AiSubscriptionProvider,
   AiSubscriptionUsage,
   AiSubscriptionUsageWindow,
   AiUsageAgentTokenBudget,

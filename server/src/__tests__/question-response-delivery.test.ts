@@ -40,6 +40,7 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported
 
 const DIRECT_ADAPTER_TYPES = [
   "acpx_local",
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "cursor_cloud",
